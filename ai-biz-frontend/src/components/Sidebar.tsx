@@ -1,24 +1,33 @@
-import { NavLink, useNavigate } from 'react-router-dom'
-import { LayoutGrid, Upload, MessageSquare, FileText, Settings, LogOut } from 'lucide-react'
-import Logo from './Logo'
-import { useAuth } from '../context/AuthContext'
+import { NavLink, useNavigate } from "react-router-dom";
+import {
+  LayoutGrid,
+  Upload,
+  MessageSquare,
+  FileText,
+  Settings,
+  LogOut,
+  BarChart,
+} from "lucide-react";
+import Logo from "./Logo";
+import { useAuth } from "../context/AuthContext";
 
 const links = [
-  { to: '/app/dashboard', label: 'Dashboard', icon: LayoutGrid },
-  { to: '/app/upload', label: 'Upload data', icon: Upload },
-  { to: '/app/ask', label: 'Ask a question', icon: MessageSquare },
-  { to: '/app/reports', label: 'Reports', icon: FileText },
-  { to: '/app/settings', label: 'Settings', icon: Settings },
-]
+  { to: "/app/dashboard", label: "Dashboard", icon: LayoutGrid },
+  { to: "/app/upload", label: "Upload data", icon: Upload },
+  { to: "/app/ask", label: "Ask a question", icon: MessageSquare },
+  { to: "/app/reports", label: "Reports", icon: FileText },
+  { to: "/app/overview", label: "Overview", icon: BarChart },
+  { to: "/app/settings", label: "Settings", icon: Settings },
+];
 
 export default function Sidebar() {
-  const navigate = useNavigate()
-  const { logout } = useAuth()
+  const navigate = useNavigate();
+  const { logout } = useAuth();
 
   const handleLogout = () => {
-    logout()
-    navigate('/')
-  }
+    logout();
+    navigate("/");
+  };
 
   return (
     <aside className="w-60 shrink-0 border-r border-ink-200 flex flex-col bg-white">
@@ -33,7 +42,9 @@ export default function Sidebar() {
             to={to}
             className={({ isActive }) =>
               `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition ${
-                isActive ? 'bg-brand-50 text-brand-700 font-semibold' : 'text-ink-600 hover:bg-ink-50'
+                isActive
+                  ? "bg-brand-50 text-brand-700 font-semibold"
+                  : "text-ink-600 hover:bg-ink-50"
               }`
             }
           >
@@ -52,5 +63,5 @@ export default function Sidebar() {
         </button>
       </div>
     </aside>
-  )
+  );
 }

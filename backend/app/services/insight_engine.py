@@ -13,6 +13,17 @@ COST_KEYWORDS = ["cost", "expense", "spend"]
 CUSTOMER_KEYWORDS = ["customer", "retention", "churn"]
 REGION_KEYWORDS = ["region", "branch", "location", "area", "store"]
 
+# Common geographic segment names used in real financial statements (e.g.
+# Apple's 10-Q reports revenue by "Americas", "Europe", "Greater China", etc.
+# rather than under a literal "region" column), used to detect region-like
+# line items extracted from PDFs where there's no categorical column at all.
+KNOWN_REGION_NAMES = [
+    "americas", "north america", "south america", "latin america",
+    "europe", "emea", "greater china", "china", "japan",
+    "asia pacific", "asia-pacific", "apac", "rest of asia pacific",
+    "middle east", "africa", "united states", "canada", "uk", "united kingdom",
+]
+
 
 def _match_column(columns: List[str], keywords: List[str]) -> str | None:
     for col in columns:
@@ -151,9 +162,37 @@ def build_executive_summary(kpis: List[Dict[str, str]], risks: List[Dict[str, st
     return " ".join(parts)
 
 
-def build_revenue_trend_series(df: pd.DataFrame | None, numeric_summary: Dict[str, Dict[str, float]]) -> Dict[str, Any]:
-    if df is None or not numeric_summary:
+def _build_revenue_trend_from_summary(numeric_summary: Dict[str, Dict[str, float]]) -> Dict[str, Any]:
+    """PDF fallback: when there's no dataframe (PDF uploads), use the raw
+    per-period values captured for the best-matching revenue line item
+    (e.g. 'Total net sales' with its Q-current/Q-prior/YTD-current/YTD-prior
+    values) instead of returning an empty series."""
+    columns = list(numeric_summary.keys())
+
+    # Prefer a "total" revenue-style row if one exists, since individual
+    # sub-lines (e.g. "Products", "Services") are less representative of
+    # overall revenue trend than a combined total line.
+    total_candidates = [c for c in columns if "total" in c.lower() and any(kw in c.lower() for kw in REVENUE_KEYWORDS)]
+    target_col = total_candidates[0] if total_candidates else _match_column(columns, REVENUE_KEYWORDS)
+    if not target_col:
+        target_col = columns[0] if columns else None
+    if not target_col:
         return {"labels": [], "values": []}
+
+    raw_values = numeric_summary[target_col].get("raw_values")
+    if not raw_values or len(raw_values) < 2:
+        return {"labels": [], "values": []}
+
+    labels = [f"P{i + 1}" for i in range(len(raw_values))]
+    return {"labels": labels, "values": raw_values}
+
+
+def build_revenue_trend_series(df: pd.DataFrame | None, numeric_summary: Dict[str, Dict[str, float]]) -> Dict[str, Any]:
+    if not numeric_summary:
+        return {"labels": [], "values": []}
+
+    if df is None:
+        return _build_revenue_trend_from_summary(numeric_summary)
 
     columns = list(numeric_summary.keys())
     target_col = _match_column(columns, REVENUE_KEYWORDS) or (columns[0] if columns else None)
@@ -172,9 +211,31 @@ def build_revenue_trend_series(df: pd.DataFrame | None, numeric_summary: Dict[st
     return {"labels": labels, "values": values}
 
 
+def _build_region_breakdown_from_summary(numeric_summary: Dict[str, Dict[str, float]]) -> Dict[str, Any]:
+    """PDF fallback: financial statements often break out revenue by named
+    geographic segments (e.g. 'Americas', 'Europe', 'Greater China') as their
+    own line items rather than under a literal 'region' column. Detect those
+    directly from the extracted line-item labels."""
+    matches = []
+    for label, stats in numeric_summary.items():
+        low = label.lower().strip()
+        if any(low == name or low.startswith(name) for name in KNOWN_REGION_NAMES):
+            matches.append((label, stats.get("sum", stats.get("mean", 0.0))))
+
+    if not matches:
+        return {"labels": [], "values": []}
+
+    matches.sort(key=lambda x: x[1], reverse=True)
+    matches = matches[:6]
+    return {
+        "labels": [m[0] for m in matches],
+        "values": [round(float(m[1]), 2) for m in matches],
+    }
+
+
 def build_region_breakdown(df: pd.DataFrame | None, categorical_columns: List[str], numeric_summary: Dict[str, Dict[str, float]]) -> Dict[str, Any]:
     if df is None:
-        return {"labels": [], "values": []}
+        return _build_region_breakdown_from_summary(numeric_summary)
 
     region_col = _match_column(categorical_columns, REGION_KEYWORDS)
     if not region_col:

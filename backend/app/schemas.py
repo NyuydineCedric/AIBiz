@@ -107,6 +107,18 @@ class ChatResponse(BaseModel):
     history: List[ChatMessageOut]
 
 
+class ChatSessionOut(BaseModel):
+    id: str
+    title: str
+    dataset_id: Optional[str] = None
+    dataset_filename: Optional[str] = None
+    dataset_status: Optional[str] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
 # ---------- Reports ----------
 
 class ReportGenerateRequest(BaseModel):

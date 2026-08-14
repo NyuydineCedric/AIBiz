@@ -123,6 +123,23 @@ def parse_tabular_file(path: str) -> Dict[str, Any]:
     }
 
 
+def _dedupe_columns(columns: List[str]) -> List[str]:
+    """Ensure column names are unique so DataFrame column indexing always
+    returns a Series, not a DataFrame (pdfplumber often yields duplicate or
+    blank headers from merged/spanning table cells)."""
+    seen: Dict[str, int] = {}
+    result = []
+    for col in columns:
+        base = col if col else "col"
+        if base not in seen:
+            seen[base] = 0
+            result.append(base)
+        else:
+            seen[base] += 1
+            result.append(f"{base}_{seen[base]}")
+    return result
+
+
 def _extract_pdf_tables(path: str) -> List[pd.DataFrame]:
     """Use pdfplumber to pull out any real tables embedded in the PDF
     (common in financial statements with actual table structures)."""
@@ -137,10 +154,15 @@ def _extract_pdf_tables(path: str) -> List[pd.DataFrame]:
                     if not table or len(table) < 2:
                         continue
                     header, *rows = table
-                    header = [str(h).strip() if h else f"col_{i}" for i, h in enumerate(header)]
-                    df = pd.DataFrame(rows, columns=header)
+                    header = [str(h).strip() if h else "" for h in header]
+                    header = _dedupe_columns(header)
+                    try:
+                        df = pd.DataFrame(rows, columns=header)
+                    except Exception:
+                        continue
                     dataframes.append(df)
-    except Exception:
+    except Exception as exc:  # noqa: BLE001
+        print(f"[data_parser] pdfplumber table extraction failed: {exc!r}")
         return []
     return dataframes
 
@@ -149,16 +171,146 @@ def _coerce_table_numeric(df: pd.DataFrame) -> pd.DataFrame:
     """Attempt to convert object columns in an extracted PDF table to numeric,
     handling accounting notation ($, commas, parens for negatives)."""
     out = df.copy()
+    # Guard against any remaining duplicate column names (defensive, since
+    # _extract_pdf_tables already dedupes, but this keeps this function safe
+    # if called with arbitrary tables elsewhere).
+    if out.columns.duplicated().any():
+        out.columns = _dedupe_columns([str(c) for c in out.columns])
+
     for col in out.columns:
-        if out[col].dtype == object:
-            converted = out[col].apply(
+        series = out[col]
+        if not isinstance(series, pd.Series):
+            continue
+        if series.dtype == object:
+            converted = series.apply(
                 lambda v: _clean_number(str(v)) if pd.notna(v) else None
             )
-            # Only replace the column if a meaningful share of values converted
             non_null = converted.notna().sum()
             if non_null > 0 and non_null >= max(1, len(converted) // 2):
                 out[col] = converted
     return out
+
+
+_NUM_TOKEN_ONLY_RE = re.compile(r"^\(?-?\$?[\d,]+\.?\d*\)?$|^[—–\-]+$|^\((?:\d{1,2}|[a-z])\)$", re.IGNORECASE)
+_FOOTNOTE_TOKEN_RE = re.compile(r"^\((?:\d{1,2}|[a-z])\)$", re.IGNORECASE)
+_DASH_ONLY_RE = re.compile(r"^[—–]+$")
+_DATE_LABEL_RE = re.compile(r"^(january|february|march|april|may|june|july|august|september|october|november|december)\b", re.IGNORECASE)
+
+
+def _extract_rows_by_position(path: str) -> List[str]:
+    """Reconstruct logical table rows using each word's vertical position on
+    the page. This recovers row structure that pypdf's plain text extraction
+    often destroys (it can merge an entire multi-column table into one long
+    run-on line with no row breaks), and works even when the PDF has no
+    visible gridlines for pdfplumber's extract_tables() to detect."""
+    if pdfplumber is None:
+        return []
+
+    rows: List[str] = []
+    try:
+        with pdfplumber.open(path) as pdf:
+            for page in pdf.pages:
+                words = page.extract_words(keep_blank_chars=False)
+                if not words:
+                    continue
+                words.sort(key=lambda w: (round(w["top"]), w["x0"]))
+
+                current_top: Optional[int] = None
+                current_row: List[dict] = []
+                for w in words:
+                    top = round(w["top"])
+                    if current_top is None or abs(top - current_top) <= 3:
+                        current_row.append(w)
+                        current_top = top if current_top is None else current_top
+                    else:
+                        current_row.sort(key=lambda x: x["x0"])
+                        rows.append(" ".join(x["text"] for x in current_row))
+                        current_row = [w]
+                        current_top = top
+                if current_row:
+                    current_row.sort(key=lambda x: x["x0"])
+                    rows.append(" ".join(x["text"] for x in current_row))
+    except Exception as exc:  # noqa: BLE001
+        print(f"[data_parser] pdfplumber word-position extraction failed: {exc!r}")
+        return []
+    return rows
+
+
+def _extract_line_items_from_rows(rows: List[str]) -> Dict[str, Dict[str, float]]:
+    """Parse reconstructed rows of the form 'Label word(s)  num1  num2  num3'
+    into KPI-shaped entries, by scanning each row from the end for trailing
+    numeric tokens (handles accounting notation and multi-period statements
+    with 2-4 value columns)."""
+    summary: Dict[str, Dict[str, float]] = {}
+
+    for row in rows:
+        cleaned = row.replace("$", " ")
+        tokens = cleaned.split()
+        if len(tokens) < 2:
+            continue
+
+        num_tokens: List[str] = []
+        i = len(tokens) - 1
+        while i >= 0 and _NUM_TOKEN_ONLY_RE.match(tokens[i]):
+            num_tokens.insert(0, tokens[i])
+            i -= 1
+        label_tokens = tokens[: i + 1]
+
+        if not label_tokens or not num_tokens:
+            continue
+
+        label = " ".join(label_tokens).strip(" :")
+        if not label or not re.search(r"[A-Za-z]", label):
+            continue
+
+        # Skip date/column-header rows like "September 28, 2024 September 30, ..."
+        # which aren't real line items, just table headers.
+        if _DATE_LABEL_RE.match(label):
+            continue
+
+        # Drop a leading footnote marker like "(1)" that landed at the start
+        # of the numeric block (right after the label) rather than being a
+        # real value, but only if there's other real numeric data present.
+        if len(num_tokens) > 1 and _FOOTNOTE_TOKEN_RE.match(num_tokens[0]):
+            num_tokens = num_tokens[1:]
+
+        # Drop any other footnote markers (e.g. "(b)", "(c)") that appear
+        # interspersed among the real values, common in reconciliation
+        # tables with per-column footnote references.
+        non_footnote = [t for t in num_tokens if not _FOOTNOTE_TOKEN_RE.match(t)]
+        if non_footnote:
+            num_tokens = non_footnote
+
+        # Em-dashes represent "no value" / zero in accounting statements, not
+        # a parse failure — drop them rather than treating the token as data.
+        num_tokens = [t for t in num_tokens if not _DASH_ONLY_RE.match(t)]
+        if not num_tokens:
+            continue
+
+        values = [v for v in (_clean_number(t) for t in num_tokens) if v is not None]
+        if not values:
+            continue
+
+        key = re.sub(r"\s+", " ", label).strip()
+        if not key or key in summary:
+            continue
+
+        first_val, last_val = values[0], values[-1]
+        if first_val == 0:
+            trend_pct = 0.0
+        else:
+            trend_pct = round(((last_val - first_val) / abs(first_val)) * 100, 2)
+
+        summary[key] = {
+            "mean": round(sum(values) / len(values), 2),
+            "sum": round(sum(values), 2),
+            "min": round(min(values), 2),
+            "max": round(max(values), 2),
+            "trend_pct": trend_pct,
+            "raw_values": [round(v, 2) for v in values],
+        }
+
+    return summary
 
 
 def _extract_line_items_from_text(text: str) -> Dict[str, Dict[str, float]]:
@@ -199,6 +351,7 @@ def _extract_line_items_from_text(text: str) -> Dict[str, Dict[str, float]]:
             "min": round(min(values), 2),
             "max": round(max(values), 2),
             "trend_pct": trend_pct,
+            "raw_values": [round(v, 2) for v in values],
         }
 
     return summary
@@ -220,7 +373,11 @@ def parse_pdf_file(path: str, max_chars: int = 4000) -> Dict[str, Any]:
     tables = _extract_pdf_tables(path)
     numeric_tables = []
     for table in tables:
-        coerced = _coerce_table_numeric(table)
+        try:
+            coerced = _coerce_table_numeric(table)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[data_parser] Skipping one extracted table due to error: {exc!r}")
+            continue
         numeric_cols = coerced.select_dtypes(include="number")
         if not numeric_cols.empty:
             numeric_tables.append(coerced)
@@ -231,8 +388,17 @@ def parse_pdf_file(path: str, max_chars: int = 4000) -> Dict[str, Any]:
         columns = list(combined_df.columns)
         preview = combined_df.head(5).fillna("").astype(str).to_dict(orient="records")
 
-    # 2) Fallback: regex line-item scan over raw text (handles narrative-style
-    # statements where pdfplumber can't detect table borders/structure)
+    # 2) Fallback: reconstruct rows from word positions on the page (handles
+    # PDFs with no visible table gridlines, and financial statements where
+    # pypdf's plain text extraction merges the whole table into one run-on
+    # line with no row breaks).
+    if not numeric_summary:
+        rows = _extract_rows_by_position(path)
+        numeric_summary = _extract_line_items_from_rows(rows)
+        columns = list(numeric_summary.keys())
+
+    # 3) Last resort: regex line-item scan over pypdf's flattened text (works
+    # when the PDF genuinely has one item per line, e.g. simple exports).
     if not numeric_summary and full_text:
         numeric_summary = _extract_line_items_from_text(full_text)
         columns = list(numeric_summary.keys())

@@ -1,13 +1,14 @@
-import { Routes, Route, Navigate } from 'react-router-dom'
-import Landing from './pages/Landing'
-import Login from './pages/Login'
-import Signup from './pages/Signup'
-import AppLayout from './components/AppLayout'
-import Dashboard from './pages/Dashboard'
-import UploadData from './pages/UploadData'
-import AskQuestion from './pages/AskQuestion'
-import Reports from './pages/Reports'
-import Settings from './pages/Settings'
+import { Routes, Route, Navigate } from "react-router-dom";
+import Landing from "./pages/Landing";
+import Login from "./pages/Login";
+import Signup from "./pages/Signup";
+import AppLayout from "./components/AppLayout";
+import Dashboard from "./pages/Dashboard";
+import UploadData from "./pages/UploadData";
+import AskQuestion from "./pages/AskQuestion";
+import Reports from "./pages/Reports";
+import Settings from "./pages/Settings";
+import Overview from "./pages/Overview";
 
 export default function App() {
   return (
@@ -22,8 +23,9 @@ export default function App() {
         <Route path="ask" element={<AskQuestion />} />
         <Route path="reports" element={<Reports />} />
         <Route path="settings" element={<Settings />} />
+        <Route path="overview" element={<Overview />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
-  )
+  );
 }

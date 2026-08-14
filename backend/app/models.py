@@ -26,6 +26,7 @@ class Organization(Base):
     insights = relationship("Insight", back_populates="organization")
     reports = relationship("Report", back_populates="organization")
     chat_messages = relationship("ChatMessage", back_populates="organization")
+    chat_sessions = relationship("ChatSession", back_populates="organization")
 
 
 class User(Base):
@@ -80,6 +81,7 @@ class Dataset(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     organization = relationship("Organization", back_populates="datasets")
+    chat_sessions = relationship("ChatSession", back_populates="dataset")
 
 
 class Insight(Base):
@@ -96,17 +98,38 @@ class Insight(Base):
     organization = relationship("Organization", back_populates="insights")
 
 
+class ChatSession(Base):
+    """A single chat thread, automatically created for each uploaded
+    document so the user can see and revisit separate conversations per
+    file, similar to chat history in other AI apps."""
+    __tablename__ = "chat_sessions"
+
+    id = Column(String, primary_key=True, default=gen_id)
+    organization_id = Column(String, ForeignKey("organizations.id"))
+    dataset_id = Column(String, ForeignKey("datasets.id"), nullable=True)
+    title = Column(String, nullable=False, default="New chat")
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    organization = relationship("Organization", back_populates="chat_sessions")
+    dataset = relationship("Dataset", back_populates="chat_sessions")
+    messages = relationship(
+        "ChatMessage", back_populates="session", order_by="ChatMessage.created_at"
+    )
+
+
 class ChatMessage(Base):
     __tablename__ = "chat_messages"
 
     id = Column(String, primary_key=True, default=gen_id)
     organization_id = Column(String, ForeignKey("organizations.id"))
+    session_id = Column(String, ForeignKey("chat_sessions.id"), nullable=True)
     user_id = Column(String, ForeignKey("users.id"))
     role = Column(String, nullable=False)  # user | ai
     text = Column(Text, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     organization = relationship("Organization", back_populates="chat_messages")
+    session = relationship("ChatSession", back_populates="messages")
 
 
 class Report(Base):

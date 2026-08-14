@@ -16,6 +16,16 @@ ALLOWED_EXTENSIONS = {".csv", ".xlsx", ".xls", ".pdf"}
 MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024  # 25MB, matches the frontend's stated limit
 
 
+def _make_session_title(filename: str) -> str:
+    """Turn a filename into a short, readable chat title, e.g.
+    'FY24_Q4_Consolidated_Financial_Statements.pdf' -> 'FY24 Q4 Consolidated Financial Statements'"""
+    name = os.path.splitext(filename)[0]
+    name = name.replace("_", " ").replace("-", " ").strip()
+    if len(name) > 60:
+        name = name[:57].rstrip() + "..."
+    return name or "New chat"
+
+
 @router.post("", response_model=schemas.DatasetOut)
 def upload_dataset(
     file: UploadFile = File(...),
@@ -101,10 +111,23 @@ def upload_dataset(
         db.commit()
         db.refresh(dataset)
     except Exception as exc:  # noqa: BLE001 - surface parse failure on the dataset record
+        print(f"[uploads] Parse failed for {file.filename!r}: {exc!r}")
         dataset.status = "error"
         db.add(dataset)
         db.commit()
         db.refresh(dataset)
+
+    # Automatically start a fresh chat thread for this document, so it shows
+    # up in the chat sidebar regardless of whether parsing fully succeeded
+    # (a failed/partial parse can still be discussed via the AI's general
+    # knowledge and whatever text excerpt was captured).
+    chat_session = models.ChatSession(
+        organization_id=current_user.organization_id,
+        dataset_id=dataset.id,
+        title=_make_session_title(dataset.filename),
+    )
+    db.add(chat_session)
+    db.commit()
 
     return schemas.DatasetOut.model_validate(dataset)
 

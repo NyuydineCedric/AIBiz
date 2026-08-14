@@ -1,8 +1,6 @@
-export default function Logo({ size = 'md' }: { size?: 'sm' | 'md' }) {
-  const dims = size === 'sm' ? 'w-6 h-6 text-xs' : 'w-8 h-8 text-sm'
-  return (
-    <div className={`${dims} rounded-lg bg-brand-600 flex items-center justify-center text-white font-bold`}>
-      AI
-    </div>
-  )
+import logo from "../components/logo.jpg";
+
+export default function Logo({ size = "md" }: { size?: "sm" | "md" }) {
+  const dims = size === "sm" ? "w-2 h-2 text-xs" : "w-2 h-2 text-sm";
+  return <img src={logo} style={{ borderRadius: "50%", width: "25px" }}></img>;
 }

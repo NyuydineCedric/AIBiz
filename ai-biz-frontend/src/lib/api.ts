@@ -80,6 +80,14 @@ export type Dataset = {
   created_at: string
 }
 export type ChatMessage = { id: string; role: 'user' | 'ai'; text: string; created_at: string }
+export type ChatSession = {
+  id: string
+  title: string
+  dataset_id: string | null
+  dataset_filename: string | null
+  dataset_status: string | null
+  created_at: string
+}
 export type Report = {
   id: string
   title: string
@@ -145,15 +153,23 @@ export function getDashboardSummary() {
 
 // ---------- Chat ----------
 
-export function askQuestion(question: string) {
-  return request<{ answer: string; history: ChatMessage[] }>('/api/chat/ask', {
+export function listChatSessions() {
+  return request<ChatSession[]>('/api/chat/sessions')
+}
+
+export function getSessionMessages(sessionId: string) {
+  return request<ChatMessage[]>(`/api/chat/sessions/${sessionId}/messages`)
+}
+
+export function askQuestionInSession(sessionId: string, question: string) {
+  return request<{ answer: string; history: ChatMessage[] }>(`/api/chat/sessions/${sessionId}/ask`, {
     method: 'POST',
     body: JSON.stringify({ question }),
   })
 }
 
-export function getChatHistory() {
-  return request<ChatMessage[]>('/api/chat/history')
+export function deleteSession(sessionId: string) {
+  return request<void>(`/api/chat/sessions/${sessionId}`, { method: 'DELETE' })
 }
 
 // ---------- Reports ----------
