@@ -1,3 +1,4 @@
+import { useNavigate } from 'react-router-dom'
 import { ShieldCheck, ShieldAlert, TrendingUp, TrendingDown, HelpCircle, type LucideIcon } from 'lucide-react'
 import type { Kpi, Insight } from '../lib/api'
 
@@ -16,11 +17,18 @@ type StatusCardProps = {
   label: string
   value: string
   detail: string
+  onClick?: () => void
 }
 
-function StatusCard({ icon: Icon, iconClass, label, value, detail }: StatusCardProps) {
+function StatusCard({ icon: Icon, iconClass, label, value, detail, onClick }: StatusCardProps) {
+  const Tag = onClick ? 'button' : 'div'
   return (
-    <div className="bg-white border border-ink-200 rounded-xl p-4 flex items-start gap-3">
+    <Tag
+      onClick={onClick}
+      className={`bg-white border border-ink-200 rounded-xl p-4 flex items-start gap-3 text-left w-full ${
+        onClick ? 'hover:border-brand-300 hover:bg-brand-50/40 transition cursor-pointer' : ''
+      }`}
+    >
       <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${iconClass}`}>
         <Icon size={18} />
       </div>
@@ -29,11 +37,13 @@ function StatusCard({ icon: Icon, iconClass, label, value, detail }: StatusCardP
         <p className="text-base font-bold text-ink-900 truncate">{value}</p>
         <p className="text-xs text-ink-500 mt-0.5">{detail}</p>
       </div>
-    </div>
+    </Tag>
   )
 }
 
 export default function BusinessHealth({ kpis, risks }: { kpis: Kpi[]; risks: Insight[] }) {
+  const navigate = useNavigate()
+
   // ---- Risk status ----
   const highCount = risks.filter((r) => r.severity === 'High').length
   const mediumCount = risks.filter((r) => r.severity === 'Medium').length
@@ -60,9 +70,9 @@ export default function BusinessHealth({ kpis, risks }: { kpis: Kpi[]; risks: In
   let profitCard: StatusCardProps | null = null
   if (revenueKpi && costKpi) {
     const profit = parseValue(revenueKpi.value) - parseValue(costKpi.value)
-    const formatted = new Intl.NumberFormat('en-US', {
+    const formatted = new Intl.NumberFormat('fr-CM', {
       style: 'currency',
-      currency: 'USD',
+      currency: 'XAF',
       maximumFractionDigits: 0,
     }).format(Math.abs(profit))
 
@@ -77,7 +87,14 @@ export default function BusinessHealth({ kpis, risks }: { kpis: Kpi[]; risks: In
 
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mt-6">
-      <StatusCard icon={riskCard.icon} iconClass={riskCard.iconClass} label="Risk status" value={riskCard.value} detail={riskCard.detail} />
+      <StatusCard
+        icon={riskCard.icon}
+        iconClass={riskCard.iconClass}
+        label="Risk status"
+        value={riskCard.value}
+        detail={riskCard.detail}
+        onClick={() => navigate('/app/risks')}
+      />
       {profitCard ? (
         <StatusCard {...profitCard} />
       ) : (

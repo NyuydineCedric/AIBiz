@@ -11,6 +11,10 @@ import Settings from "./pages/Settings";
 import Overview from "./pages/Overview";
 import Forecast from "./pages/Forecast";
 import DailyEntry from "./pages/DailyEntry";
+import ProductCatalog from "./pages/ProductCatalog";
+import CurrentStock from "./pages/CurrentStock";
+import DailyHistory from "./pages/DailyHistory";
+import Risks from "./pages/Risks";
 
 export default function App() {
   return (
@@ -22,6 +26,10 @@ export default function App() {
         <Route index element={<Navigate to="dashboard" replace />} />
         <Route path="dashboard" element={<Dashboard />} />
         <Route path="daily-entry" element={<DailyEntry />} />
+        <Route path="products" element={<ProductCatalog />} />
+        <Route path="stock" element={<CurrentStock />} />
+        <Route path="daily-history" element={<DailyHistory />} />
+        <Route path="risks" element={<Risks />} />
         <Route path="upload" element={<UploadData />} />
         <Route path="ask" element={<AskQuestion />} />
         <Route path="reports" element={<Reports />} />

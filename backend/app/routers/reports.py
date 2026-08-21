@@ -9,7 +9,7 @@ from .. import models, schemas
 from ..config import settings
 from ..deps import get_db, get_current_user
 from ..services import report_generator
-from .dashboard import _latest_parsed_dataset
+from .dashboard import _latest_parsed_dataset, _default_metric_label, _build_metric_series
 
 router = APIRouter(prefix="/api/reports", tags=["reports"])
 
@@ -56,30 +56,53 @@ def generate_report(
     if not dataset:
         raise HTTPException(status_code=400, detail="Upload a dataset before generating a report.")
 
+    # Fall back to "summary" for anything unrecognized rather than silently
+    # mislabeling the file — every other type below is tailored to exactly
+    # match REPORT_TITLES, so an unknown type would otherwise render with
+    # the generic layout under a title that doesn't say "summary" at all.
+    report_type = payload.report_type if payload.report_type in REPORT_TITLES else "summary"
+
     insights = db.query(models.Insight).filter(models.Insight.dataset_id == dataset.id).all()
     risks = [{"severity": i.severity, "text": i.text} for i in insights if i.type == "risk"]
     recommendations = [i.text for i in insights if i.type == "recommendation"]
 
-    title = payload.title or REPORT_TITLES.get(payload.report_type, "Business report")
+    # A "forecast" report needs actual forecast numbers, not just the
+    # generic KPI/risk/recommendation content every other type also gets —
+    # reuse the exact same series-building logic the Forecast page itself
+    # uses, so the numbers in the report match what's on screen.
+    forecast_data = None
+    if report_type == "forecast":
+        metric_label = _default_metric_label(dataset)
+        series = _build_metric_series(dataset, metric_label, periods_ahead=7)
+        if series:
+            forecast_data = {
+                "metric_label": series.metric_label,
+                "trend": series.trend,
+                "forecast_labels": series.forecast_labels,
+                "forecast_values": series.forecast_values,
+            }
+
+    title = payload.title or REPORT_TITLES.get(report_type, "Business report")
     org_dir = os.path.join(settings.REPORTS_DIR, current_user.organization_id)
     os.makedirs(org_dir, exist_ok=True)
 
     stamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
-    pdf_path = os.path.join(org_dir, f"{stamp}_{payload.report_type}.pdf")
-    xlsx_path = os.path.join(org_dir, f"{stamp}_{payload.report_type}.xlsx")
+    pdf_path = os.path.join(org_dir, f"{stamp}_{report_type}.pdf")
+    xlsx_path = os.path.join(org_dir, f"{stamp}_{report_type}.xlsx")
 
     report_generator.generate_pdf_report(
-        pdf_path, title, dataset.executive_summary or "", dataset.kpis or [], risks, recommendations
+        pdf_path, title, report_type, dataset.executive_summary or "", dataset.kpis or [], risks,
+        recommendations, forecast_data,
     )
     report_generator.generate_xlsx_report(
-        xlsx_path, title, dataset.kpis or [], risks, recommendations
+        xlsx_path, title, report_type, dataset.kpis or [], risks, recommendations, forecast_data
     )
 
     report = models.Report(
         organization_id=current_user.organization_id,
         title=title,
         description=f"Generated from {dataset.filename}",
-        report_type=payload.report_type,
+        report_type=report_type,
         pdf_path=pdf_path,
         xlsx_path=xlsx_path,
     )

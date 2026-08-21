@@ -9,6 +9,13 @@ const iconMap: Record<string, { Icon: typeof FileText; color: string }> = {
   performance: { Icon: BarChart3, color: 'bg-amber-100 text-amber-600' },
 }
 
+const REPORT_TYPES: { value: string; label: string }[] = [
+  { value: 'summary', label: 'Executive summary' },
+  { value: 'risk', label: 'Risk assessment' },
+  { value: 'forecast', label: 'Revenue forecast' },
+  { value: 'performance', label: 'Performance summary' },
+]
+
 function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
 }
@@ -18,6 +25,7 @@ export default function Reports() {
   const [loading, setLoading] = useState(true)
   const [generating, setGenerating] = useState(false)
   const [error, setError] = useState('')
+  const [reportType, setReportType] = useState('summary')
 
   const loadReports = () => {
     api
@@ -33,7 +41,7 @@ export default function Reports() {
     setError('')
     setGenerating(true)
     try {
-      await api.generateReport('summary')
+      await api.generateReport(reportType)
       loadReports()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to generate report. Upload a dataset first.')
@@ -52,16 +60,29 @@ export default function Reports() {
 
   return (
     <div className="p-6">
-      <div className="flex items-center justify-between mb-5">
+      <div className="flex items-center justify-between mb-5 flex-wrap gap-3">
         <p className="text-sm text-ink-500">AI-generated executive reports and summaries</p>
-        <button
-          onClick={handleGenerate}
-          disabled={generating}
-          className="bg-brand-600 hover:bg-brand-700 disabled:opacity-60 text-white text-sm font-semibold px-4 py-2 rounded-lg transition flex items-center gap-2"
-        >
-          <Plus size={16} />
-          {generating ? 'Generating...' : 'Generate report'}
-        </button>
+        <div className="flex items-center gap-2">
+          <select
+            value={reportType}
+            onChange={(e) => setReportType(e.target.value)}
+            className="border border-ink-200 rounded-lg px-3 py-2 text-sm bg-white"
+          >
+            {REPORT_TYPES.map((t) => (
+              <option key={t.value} value={t.value}>
+                {t.label}
+              </option>
+            ))}
+          </select>
+          <button
+            onClick={handleGenerate}
+            disabled={generating}
+            className="bg-brand-600 hover:bg-brand-700 disabled:opacity-60 text-white text-sm font-semibold px-4 py-2 rounded-lg transition flex items-center gap-2"
+          >
+            <Plus size={16} />
+            {generating ? 'Generating...' : 'Generate report'}
+          </button>
+        </div>
       </div>
 
       {error && (

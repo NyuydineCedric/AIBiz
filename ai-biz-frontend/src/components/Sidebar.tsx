@@ -9,6 +9,10 @@ import {
   BarChart,
   LineChart,
   NotebookPen,
+  Package,
+  Boxes,
+  History,
+  ShieldAlert,
 } from "lucide-react";
 import Logo from "./Logo";
 import { useAuth } from "../context/AuthContext";
@@ -16,6 +20,10 @@ import { useAuth } from "../context/AuthContext";
 const links = [
   { to: "/app/dashboard", label: "Dashboard", icon: LayoutGrid },
   { to: "/app/daily-entry", label: "Daily log", icon: NotebookPen },
+  { to: "/app/products", label: "Product catalog", icon: Package },
+  { to: "/app/stock", label: "Current stock", icon: Boxes },
+  { to: "/app/daily-history", label: "Recent days", icon: History },
+  { to: "/app/risks", label: "Detected risks", icon: ShieldAlert },
   { to: "/app/upload", label: "Upload data", icon: Upload },
   { to: "/app/ask", label: "Ask a question", icon: MessageSquare },
   { to: "/app/reports", label: "Reports", icon: FileText },

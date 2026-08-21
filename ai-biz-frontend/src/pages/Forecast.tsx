@@ -23,20 +23,20 @@ const COMPARE_PALETTE = [
 ]
 
 const currency = (v: number) =>
-  new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(v)
+  new Intl.NumberFormat('fr-CM', { style: 'currency', currency: 'XAF', maximumFractionDigits: 0 }).format(v)
 
 const plainNumber = (v: number) => new Intl.NumberFormat('en-US', { maximumFractionDigits: 1 }).format(v)
 
-// Metrics like "Customer Retention Rate" or "Customer Count" aren't dollar
-// amounts — format those as plain numbers instead of currency.
+// Metrics like "Customer Retention Rate" or "Customer Count" aren't
+// monetary amounts — format those as plain numbers instead of currency.
 const isCurrencyMetric = (label: string) => !/rate|percent|count|ratio/i.test(label)
 
 const axisLabel = (v: number, isCurrency: boolean) => {
-  const prefix = isCurrency ? '$' : ''
+  const suffix = isCurrency ? ' FCFA' : ''
   if (Math.abs(v) >= 1000) {
-    return prefix + new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(v)
+    return new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(v) + suffix
   }
-  return prefix + v.toFixed(1)
+  return v.toFixed(0) + suffix
 }
 
 const PERIOD_OPTIONS = [7, 14, 30]

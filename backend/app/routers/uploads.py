@@ -12,7 +12,7 @@ from ..services import data_parser, insight_engine
 
 router = APIRouter(prefix="/api/uploads", tags=["uploads"])
 
-ALLOWED_EXTENSIONS = {".csv", ".xlsx", ".xls", ".pdf"}
+ALLOWED_EXTENSIONS = {".csv", ".xlsx", ".xls", ".pdf", ".png", ".jpg", ".jpeg", ".webp"}
 MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024  # 25MB, matches the frontend's stated limit
 
 
@@ -34,7 +34,9 @@ def upload_dataset(
 ):
     ext = os.path.splitext(file.filename or "")[1].lower()
     if ext not in ALLOWED_EXTENSIONS:
-        raise HTTPException(status_code=400, detail="Unsupported file type. Upload CSV, Excel, or PDF.")
+        raise HTTPException(
+            status_code=400, detail="Unsupported file type. Upload CSV, Excel, PDF, or an image (JPG/PNG/WEBP)."
+        )
 
     org_dir = os.path.join(settings.UPLOADS_DIR, current_user.organization_id)
     os.makedirs(org_dir, exist_ok=True)

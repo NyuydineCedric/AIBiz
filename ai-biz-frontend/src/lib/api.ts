@@ -189,7 +189,7 @@ export function getForecast(periodsAhead = 7) {
 
 export type EntryType = 'sale' | 'purchase'
 
-export type DailyEntryLine = {
+export type DailyEntryItem = {
   entry_type: EntryType
   item_name: string
   category?: string
@@ -228,10 +228,10 @@ export type StockItem = {
   low_stock: boolean
 }
 
-export function addDailyEntries(entryDate: string, lines: DailyEntryLine[]) {
+export function addDailyEntries(entryDate: string, items: DailyEntryItem[]) {
   return request<DailyEntry[]>('/api/daily/entries', {
     method: 'POST',
-    body: JSON.stringify({ entry_date: entryDate, entries: lines }),
+    body: JSON.stringify({ entry_date: entryDate, entries: items }),
   })
 }
 
@@ -272,6 +272,13 @@ export function listProducts() {
 
 export function addProduct(payload: { name: string; category?: string; default_unit_price?: number }) {
   return request<Product>('/api/products', { method: 'POST', body: JSON.stringify(payload) })
+}
+
+export function updateProduct(
+  productId: string,
+  payload: { name?: string; category?: string; default_unit_price?: number }
+) {
+  return request<Product>(`/api/products/${productId}`, { method: 'PUT', body: JSON.stringify(payload) })
 }
 
 export function deleteProduct(productId: string) {

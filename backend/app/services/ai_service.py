@@ -73,6 +73,46 @@ def _get_gemini_client():
     return _gemini_client
 
 
+_IMAGE_ANALYSIS_PROMPT = (
+    "You are analyzing a photo or scan of a business document — this could be a receipt, "
+    "invoice, handwritten sales/purchase ledger page, price list, or a screenshot of a "
+    "spreadsheet. Extract every distinct line item you can clearly see that has a name and a "
+    "numeric amount (e.g. a product name and its price or total, an expense category and its "
+    "amount, a revenue figure). Ignore dates, page numbers, and phone numbers.\n\n"
+    "Respond with ONLY a single JSON object, no markdown fences, no explanation, in exactly "
+    "this shape:\n"
+    '{"description": "one short sentence describing what the image shows", '
+    '"items": [{"label": "Item or category name", "value": 1234.5}, ...]}\n\n'
+    "If you can't find any numeric line items, return an empty items array."
+)
+
+
+def analyze_image_for_data(image_bytes: bytes, mime_type: str) -> Optional[str]:
+    """Sends an uploaded image to Gemini's vision-capable model and asks it to
+    extract labeled numeric line items (see _IMAGE_ANALYSIS_PROMPT). Returns
+    the raw text response (expected to be a JSON object) for the caller to
+    parse, or None if no Gemini client is available (missing API key/package)
+    so the caller can fail gracefully instead of crashing the upload."""
+    client = _get_gemini_client()
+    if not client:
+        return None
+
+    try:
+        from google.genai import types
+
+        response = client.models.generate_content(
+            model=_GEMINI_MODEL,
+            contents=[
+                _IMAGE_ANALYSIS_PROMPT,
+                types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
+            ],
+        )
+        return (response.text or "").strip()
+    except Exception as exc:  # noqa: BLE001
+        print(f"[ai_service] Gemini image analysis failed: {exc!r}")
+        return None
+
+
 def _smalltalk_answer(question: str, has_data: bool) -> Optional[str]:
     """Handle only the most trivial greetings/thanks before anything else —
     everything else (including 'what can you do', general questions, etc.)
@@ -119,7 +159,7 @@ def _fallback_answer(question: str, context: Dict[str, Any]) -> str:
             direction = forecast.get("trend", "flat")
             word = "trending up" if direction == "up" else "trending down" if direction == "down" else "roughly flat"
             return (
-                f"Revenue is {word} — the projection puts it at about {values[-1]:,.2f} "
+                f"Revenue is {word} — the projection puts it at about {values[-1]:,.0f} "
                 f"{len(values)} periods out, based on the trend in your uploaded data."
             )
         return (
@@ -143,7 +183,7 @@ def _fallback_answer(question: str, context: Dict[str, Any]) -> str:
                 direction = "up" if trend > 0 else "down" if trend < 0 else "flat"
                 sign = "+" if trend >= 0 else ""
                 return (
-                    f"{metric_col} is currently at {value:,.2f}, {sign}{trend:.1f}% "
+                    f"{metric_col} is currently at {value:,.0f}, {sign}{trend:.1f}% "
                     f"({direction}) across the uploaded period."
                 )
 
@@ -163,7 +203,7 @@ def _fallback_answer(question: str, context: Dict[str, Any]) -> str:
                 value = None
                 if label in region["labels"]:
                     value = region["values"][region["labels"].index(label)]
-                value_part = f" (currently at {value:,.2f})" if value is not None else ""
+                value_part = f" (currently at {value:,.0f})" if value is not None else ""
                 return f"{label} is the {qualifier} region in your uploaded data, {sign}{pct:.1f}% over the period{value_part}."
 
             # No trend data available (e.g. region breakdown grouped from a
@@ -174,7 +214,7 @@ def _fallback_answer(question: str, context: Dict[str, Any]) -> str:
             else:
                 idx = region["values"].index(max(region["values"]))
                 qualifier = "best-performing"
-            return f"{region['labels'][idx]} is the {qualifier} region in your uploaded data, at {region['values'][idx]:,.2f}."
+            return f"{region['labels'][idx]} is the {qualifier} region in your uploaded data, at {region['values'][idx]:,.0f}."
         return "I don't see a region or branch column in your uploaded data yet."
 
     if any(w in q for w in ["risk", "wrong", "problem", "concern"]):

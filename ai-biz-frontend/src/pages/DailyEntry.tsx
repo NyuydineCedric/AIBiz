@@ -1,9 +1,9 @@
-import { Fragment, useEffect, useMemo, useState } from 'react'
-import { Plus, Trash2, ShoppingCart, PackagePlus, AlertTriangle, ChevronDown, ChevronUp, RefreshCw, Package } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
+import { Plus, Trash2, ShoppingCart, PackagePlus, RefreshCw } from 'lucide-react'
 import * as api from '../lib/api'
 
 const currency = (v: number) =>
-  new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 }).format(v)
+  new Intl.NumberFormat('fr-CM', { style: 'currency', currency: 'XAF', maximumFractionDigits: 0 }).format(v)
 
 function todayISO(): string {
   const d = new Date()
@@ -23,76 +23,91 @@ function addDaysISO(iso: string, days: number): string {
   return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`
 }
 
-type DraftLine = api.DailyEntryLine & { _key: string }
+type DraftItem = api.DailyEntryItem & { _key: string }
 
 const emptyForm = { entry_type: 'sale' as api.EntryType, item_name: '', category: '', quantity: 1, unit_price: 0, notes: '' }
 
-const emptyProductForm = { name: '', category: '', default_unit_price: 0 }
-
 export default function DailyEntry() {
   const [entryDate, setEntryDate] = useState(todayISO())
-  const [lines, setLines] = useState<DraftLine[]>([])
+  const [items, setItems] = useState<DraftItem[]>([])
   const [form, setForm] = useState(emptyForm)
 
-  const [days, setDays] = useState<api.DaySummary[]>([])
-  const [stock, setStock] = useState<api.StockItem[]>([])
-  const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [saveMessage, setSaveMessage] = useState('')
-
-  const [expandedDay, setExpandedDay] = useState<string | null>(null)
-  const [dayEntries, setDayEntries] = useState<api.DailyEntry[]>([])
-  const [loadingDay, setLoadingDay] = useState(false)
   const [rebuilding, setRebuilding] = useState(false)
 
-  // Product catalog — set up once by the owner, then picked from a dropdown
-  // when logging a day instead of retyping the item name every time.
+  // Product catalog — managed on its own page (Product catalog), just read
+  // here to populate the item dropdown when logging a day.
   const [products, setProducts] = useState<api.Product[]>([])
   const [loadingProducts, setLoadingProducts] = useState(true)
-  const [productForm, setProductForm] = useState(emptyProductForm)
-  const [savingProduct, setSavingProduct] = useState(false)
   const [usingCustomItem, setUsingCustomItem] = useState(false)
 
-  const loadProducts = () => {
-    setLoadingProducts(true)
+  // Current stock — read here too, purely so a sale can be checked against
+  // what's actually on hand before it's added ("the store cannot sell what
+  // it does not have"). Managed for real on the Current Stock page.
+  const [stock, setStock] = useState<api.StockItem[]>([])
+
+  useEffect(() => {
     api
       .listProducts()
       .then(setProducts)
       .catch((err) => setError(err instanceof Error ? err.message : 'Failed to load products.'))
       .finally(() => setLoadingProducts(false))
+  }, [])
+
+  const loadStock = () => {
+    api.getStockLevels().then(setStock).catch(() => {
+      // Non-critical — worst case the stock check just falls back to
+      // treating unknown items as "0 on hand" (see stockOnHand below).
+    })
   }
 
-  useEffect(loadProducts, [])
+  useEffect(loadStock, [])
 
-  const addProduct = async () => {
-    if (!productForm.name.trim()) {
-      setError('Give the product a name first.')
-      return
-    }
-    setError('')
-    setSavingProduct(true)
-    try {
-      await api.addProduct({
-        name: productForm.name.trim(),
-        category: productForm.category.trim(),
-        default_unit_price: productForm.default_unit_price,
+  const stockOnHand = (name: string) => stock.find((s) => s.item_name === name)?.quantity_on_hand ?? 0
+
+  // How much of an item is actually available right now, accounting for
+  // sale/purchase items already queued (but not yet saved) for it today —
+  // otherwise queuing two sales of the same item in one sitting wouldn't
+  // catch the second one going negative until after "Save day".
+  const availableToSell = (name: string) =>
+    items.reduce(
+      (avail, it) => (it.item_name === name ? avail + (it.entry_type === 'sale' ? -it.quantity : it.quantity) : avail),
+      stockOnHand(name)
+    )
+
+  // The date always starts as "today" in local component state, but since
+  // Recent Days/Product catalog/Current stock are now their own pages, just
+  // navigating over to one of them and back remounts this page and would
+  // silently reset that back to today, undoing the day it had already
+  // advanced to. Deriving it from the actual last saved day instead — one
+  // day after whatever was most recently logged — makes it survive
+  // navigation (and even a page reload) instead of only living in memory.
+  useEffect(() => {
+    api
+      .listDailyDays(1)
+      .then((days) => {
+        if (days.length > 0) {
+          setEntryDate(addDaysISO(days[0].entry_date, 1))
+        }
       })
-      setProductForm(emptyProductForm)
-      loadProducts()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to add product.')
-    } finally {
-      setSavingProduct(false)
-    }
-  }
+      .catch(() => {
+        // Non-critical — just keep today's date as the fallback.
+      })
+  }, [])
 
-  const removeProduct = async (id: string) => {
+  const rebuildData = async () => {
+    setRebuilding(true)
+    setError('')
     try {
-      await api.deleteProduct(id)
-      setProducts((prev) => prev.filter((p) => p.id !== id))
+      await api.rebuildDailyDataset()
+      setSaveMessage('Data refreshed.')
+      setTimeout(() => setSaveMessage(''), 3000)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to remove product.')
+      setError(err instanceof Error ? err.message : 'Failed to refresh data.')
+    } finally {
+      setRebuilding(false)
     }
   }
 
@@ -113,34 +128,7 @@ export default function DailyEntry() {
     }))
   }
 
-  const rebuildData = async () => {
-    setRebuilding(true)
-    setError('')
-    try {
-      await api.rebuildDailyDataset()
-      loadDaysAndStock()
-      setSaveMessage('Data refreshed.')
-      setTimeout(() => setSaveMessage(''), 3000)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to refresh data.')
-    } finally {
-      setRebuilding(false)
-    }
-  }
-
-  const loadDaysAndStock = () => {
-    Promise.all([api.listDailyDays(30), api.getStockLevels()])
-      .then(([d, s]) => {
-        setDays(d)
-        setStock(s)
-      })
-      .catch((err) => setError(err instanceof Error ? err.message : 'Failed to load daily data.'))
-      .finally(() => setLoading(false))
-  }
-
-  useEffect(loadDaysAndStock, [])
-
-  const addLine = () => {
+  const addItem = () => {
     if (!form.item_name.trim()) {
       setError('Give the item a name first.')
       return
@@ -149,28 +137,39 @@ export default function DailyEntry() {
       setError('Quantity must be greater than 0.')
       return
     }
+    if (form.entry_type === 'sale') {
+      const available = availableToSell(form.item_name)
+      if (form.quantity > available) {
+        setError(
+          available <= 0
+            ? `${form.item_name} is out of stock.`
+            : `Only ${available} of ${form.item_name} in stock — can't sell ${form.quantity}.`
+        )
+        return
+      }
+    }
     setError('')
-    setLines((prev) => [...prev, { ...form, _key: `${Date.now()}-${Math.random()}` }])
+    setItems((prev) => [...prev, { ...form, _key: `${Date.now()}-${Math.random()}` }])
     setForm({ ...emptyForm, entry_type: form.entry_type })
     setUsingCustomItem(false)
   }
 
-  const removeLine = (key: string) => setLines((prev) => prev.filter((l) => l._key !== key))
+  const removeItem = (key: string) => setItems((prev) => prev.filter((it) => it._key !== key))
 
   const totals = useMemo(() => {
     let sales = 0
     let purchases = 0
-    for (const l of lines) {
-      const amt = l.quantity * l.unit_price
-      if (l.entry_type === 'sale') sales += amt
+    for (const it of items) {
+      const amt = it.quantity * it.unit_price
+      if (it.entry_type === 'sale') sales += amt
       else purchases += amt
     }
     return { sales, purchases, net: sales - purchases }
-  }, [lines])
+  }, [items])
 
   const saveDay = async () => {
-    if (lines.length === 0) {
-      setError('Add at least one line before saving the day.')
+    if (items.length === 0) {
+      setError('Add at least one item before saving the day.')
       return
     }
     setError('')
@@ -178,14 +177,13 @@ export default function DailyEntry() {
     try {
       await api.addDailyEntries(
         entryDate,
-        lines.map(({ _key, ...rest }) => rest)
+        items.map(({ _key, ...rest }) => rest)
       )
       const savedDate = entryDate
-      setLines([])
-      setSaveMessage(`Saved ${formatDate(savedDate)} — ${lines.length} line${lines.length === 1 ? '' : 's'}.`)
+      setItems([])
+      setSaveMessage(`Saved ${formatDate(savedDate)} — ${items.length} item${items.length === 1 ? '' : 's'}.`)
       setTimeout(() => setSaveMessage(''), 4000)
-      loadDaysAndStock()
-      if (expandedDay === savedDate) openDay(savedDate)
+      loadStock()
 
       // Once a day is saved, that day is "closed" — always move the picker
       // to the next calendar day, even past today, so the form is already
@@ -195,30 +193,6 @@ export default function DailyEntry() {
       setError(err instanceof Error ? err.message : 'Failed to save entries.')
     } finally {
       setSaving(false)
-    }
-  }
-
-  const openDay = (date: string) => {
-    if (expandedDay === date) {
-      setExpandedDay(null)
-      return
-    }
-    setExpandedDay(date)
-    setLoadingDay(true)
-    api
-      .listDailyEntries(date)
-      .then(setDayEntries)
-      .catch((err) => setError(err instanceof Error ? err.message : 'Failed to load that day.'))
-      .finally(() => setLoadingDay(false))
-  }
-
-  const deleteEntry = async (id: string) => {
-    try {
-      await api.deleteDailyEntry(id)
-      setDayEntries((prev) => prev.filter((e) => e.id !== id))
-      loadDaysAndStock()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to delete entry.')
     }
   }
 
@@ -247,125 +221,133 @@ export default function DailyEntry() {
         <div className="mb-4 text-sm text-teal-700 bg-teal-50 border border-teal-100 rounded-lg px-4 py-3">{saveMessage}</div>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Entry form */}
-        <div className="lg:col-span-2 bg-white rounded-xl border border-ink-200 p-5">
-          <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
-            <p className="text-sm font-semibold text-ink-900">Log entries for</p>
-            <input
-              type="date"
-              value={entryDate}
-              onChange={(e) => setEntryDate(e.target.value)}
-              className="border border-ink-200 rounded-lg px-3 py-1.5 text-sm text-ink-800"
-            />
-          </div>
+      {/* Entry form */}
+      <div className="bg-white rounded-xl border border-ink-200 p-5">
+        <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+          <p className="text-sm font-semibold text-ink-900">Log entries for</p>
+          <input
+            type="date"
+            value={entryDate}
+            onChange={(e) => setEntryDate(e.target.value)}
+            className="border border-ink-200 rounded-lg px-3 py-1.5 text-sm text-ink-800"
+          />
+        </div>
 
-          <div className="flex items-center gap-1 bg-ink-100 rounded-lg p-1 mb-4 w-fit">
-            <button
-              onClick={() => setForm((f) => ({ ...f, entry_type: 'sale' }))}
-              className={`flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-md transition ${
-                form.entry_type === 'sale' ? 'bg-white text-teal-700 shadow-sm' : 'text-ink-500 hover:text-ink-700'
-              }`}
-            >
-              <ShoppingCart size={14} /> Sale
-            </button>
-            <button
-              onClick={() => setForm((f) => ({ ...f, entry_type: 'purchase' }))}
-              className={`flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-md transition ${
-                form.entry_type === 'purchase' ? 'bg-white text-amber-700 shadow-sm' : 'text-ink-500 hover:text-ink-700'
-              }`}
-            >
-              <PackagePlus size={14} /> Purchase (stock in)
-            </button>
-          </div>
+        <div className="flex items-center gap-1 bg-ink-100 rounded-lg p-1 mb-4 w-fit">
+          <button
+            onClick={() => setForm((f) => ({ ...f, entry_type: 'sale' }))}
+            className={`flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-md transition ${
+              form.entry_type === 'sale' ? 'bg-white text-teal-700 shadow-sm' : 'text-ink-500 hover:text-ink-700'
+            }`}
+          >
+            <ShoppingCart size={14} /> Sale
+          </button>
+          <button
+            onClick={() => setForm((f) => ({ ...f, entry_type: 'purchase' }))}
+            className={`flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-md transition ${
+              form.entry_type === 'purchase' ? 'bg-white text-amber-700 shadow-sm' : 'text-ink-500 hover:text-ink-700'
+            }`}
+          >
+            <PackagePlus size={14} /> Purchase (stock in)
+          </button>
+        </div>
 
-          <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-3">
-            {products.length > 0 && !usingCustomItem ? (
-              <select
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-3">
+          {products.length > 0 && !usingCustomItem ? (
+            <select
+              value={form.item_name}
+              onChange={(e) => selectProduct(e.target.value)}
+              className="col-span-2 border border-ink-200 rounded-lg px-3 py-2 text-sm bg-white"
+            >
+              <option value="">Select a product</option>
+              {products.map((p) => (
+                <option key={p.id} value={p.name}>
+                  {p.name}
+                </option>
+              ))}
+              <option value="__custom__">+ Type a one-off item…</option>
+            </select>
+          ) : (
+            <div className="col-span-2 flex items-center gap-1.5">
+              <input
+                placeholder="Item name"
                 value={form.item_name}
-                onChange={(e) => selectProduct(e.target.value)}
-                className="col-span-2 border border-ink-200 rounded-lg px-3 py-2 text-sm bg-white"
-              >
-                <option value="">Select a product</option>
-                {products.map((p) => (
-                  <option key={p.id} value={p.name}>
-                    {p.name}
-                  </option>
-                ))}
-                <option value="__custom__">+ Type a one-off item…</option>
-              </select>
-            ) : (
-              <div className="col-span-2 flex items-center gap-1.5">
-                <input
-                  placeholder="Item name"
-                  value={form.item_name}
-                  onChange={(e) => setForm((f) => ({ ...f, item_name: e.target.value }))}
-                  className="flex-1 border border-ink-200 rounded-lg px-3 py-2 text-sm"
-                />
-                {products.length > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setUsingCustomItem(false)
-                      setForm((f) => ({ ...f, item_name: '' }))
-                    }}
-                    className="text-xs text-ink-400 hover:text-ink-700 shrink-0"
-                    title="Back to product list"
-                  >
-                    List
-                  </button>
-                )}
-              </div>
-            )}
-            <input
-              placeholder="Category (optional)"
-              value={form.category}
-              onChange={(e) => setForm((f) => ({ ...f, category: e.target.value }))}
-              className="border border-ink-200 rounded-lg px-3 py-2 text-sm"
-            />
-            <input
-              type="number"
-              min={0}
-              step="0.01"
-              placeholder="Qty"
-              value={form.quantity}
-              onChange={(e) => setForm((f) => ({ ...f, quantity: Number(e.target.value) }))}
-              className="border border-ink-200 rounded-lg px-3 py-2 text-sm"
-            />
-            <input
-              type="number"
-              min={0}
-              step="0.01"
-              placeholder="Unit price"
-              value={form.unit_price}
-              onChange={(e) => setForm((f) => ({ ...f, unit_price: Number(e.target.value) }))}
-              className="border border-ink-200 rounded-lg px-3 py-2 text-sm"
-            />
-          </div>
-
-          {products.length === 0 && !loadingProducts && (
-            <p className="text-xs text-ink-400 mb-3">
-              No products set up yet — add some in the "Product catalog" panel so they show up as a dropdown here.
-            </p>
+                onChange={(e) => setForm((f) => ({ ...f, item_name: e.target.value }))}
+                className="flex-1 border border-ink-200 rounded-lg px-3 py-2 text-sm"
+              />
+              {products.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setUsingCustomItem(false)
+                    setForm((f) => ({ ...f, item_name: '' }))
+                  }}
+                  className="text-xs text-ink-400 hover:text-ink-700 shrink-0"
+                  title="Back to product list"
+                >
+                  List
+                </button>
+              )}
+            </div>
           )}
+          <input
+            placeholder="Category (optional)"
+            value={form.category}
+            onChange={(e) => setForm((f) => ({ ...f, category: e.target.value }))}
+            className="border border-ink-200 rounded-lg px-3 py-2 text-sm"
+          />
+          <input
+            type="number"
+            min={0}
+            step="1"
+            placeholder="Qty"
+            value={form.quantity}
+            onChange={(e) => setForm((f) => ({ ...f, quantity: Math.round(Number(e.target.value)) }))}
+            className="border border-ink-200 rounded-lg px-3 py-2 text-sm"
+          />
+          <input
+            type="number"
+            min={0}
+            step="0.01"
+            placeholder="Unit price"
+            value={form.unit_price}
+            onChange={(e) => setForm((f) => ({ ...f, unit_price: Number(e.target.value) }))}
+            className="border border-ink-200 rounded-lg px-3 py-2 text-sm"
+          />
+        </div>
 
-          <div className="flex items-center justify-between mb-4">
-            <p className="text-xs text-ink-500">
-              Line total: <span className="font-semibold text-ink-800">{currency(form.quantity * form.unit_price)}</span>
-            </p>
-            <button
-              onClick={addLine}
-              className="flex items-center gap-1.5 bg-ink-900 hover:bg-ink-800 text-white text-xs font-semibold px-3 py-2 rounded-lg transition"
-            >
-              <Plus size={14} /> Add line
-            </button>
-          </div>
+        {products.length === 0 && !loadingProducts && (
+          <p className="text-xs text-ink-400 mb-3">
+            No products set up yet — add some on the Product catalog page so they show up as a dropdown here.
+          </p>
+        )}
 
-          {lines.length > 0 && (
-            <div className="border border-ink-100 rounded-lg overflow-hidden mb-4">
+        {form.entry_type === 'sale' && form.item_name && (
+          <p className={`text-xs mb-3 ${availableToSell(form.item_name) <= 0 ? 'text-rose-600' : 'text-ink-400'}`}>
+            {availableToSell(form.item_name) <= 0
+              ? `${form.item_name} is out of stock.`
+              : `${availableToSell(form.item_name)} ${form.item_name} in stock.`}
+          </p>
+        )}
+
+        <div className="flex items-center justify-between mb-4">
+          <p className="text-xs text-ink-500">
+            Item total: <span className="font-semibold text-ink-800">{currency(form.quantity * form.unit_price)}</span>
+          </p>
+          <button
+            onClick={addItem}
+            className="flex items-center gap-1.5 bg-ink-900 hover:bg-ink-800 text-white text-xs font-semibold px-3 py-2 rounded-lg transition"
+          >
+            <Plus size={14} /> Add item
+          </button>
+        </div>
+
+        {items.length > 0 && (
+          <div className="border border-ink-100 rounded-lg overflow-hidden mb-4">
+            <div className="max-h-72 overflow-y-auto">
               <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-left text-xs text-ink-500 bg-ink-50">
+                <thead className="sticky top-0 bg-ink-50 z-10">
+                  <tr className="text-left text-xs text-ink-500">
                     <th className="px-3 py-2 font-medium">Type</th>
                     <th className="px-3 py-2 font-medium">Item</th>
                     <th className="px-3 py-2 font-medium text-right">Qty</th>
@@ -375,23 +357,23 @@ export default function DailyEntry() {
                   </tr>
                 </thead>
                 <tbody>
-                  {lines.map((l) => (
-                    <tr key={l._key} className="border-t border-ink-100">
+                  {items.map((it) => (
+                    <tr key={it._key} className="border-t border-ink-100 bg-white">
                       <td className="px-3 py-2">
                         <span
                           className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
-                            l.entry_type === 'sale' ? 'text-teal-700 bg-teal-100' : 'text-amber-700 bg-amber-100'
+                            it.entry_type === 'sale' ? 'text-teal-700 bg-teal-100' : 'text-amber-700 bg-amber-100'
                           }`}
                         >
-                          {l.entry_type === 'sale' ? 'Sale' : 'Purchase'}
+                          {it.entry_type === 'sale' ? 'Sale' : 'Purchase'}
                         </span>
                       </td>
-                      <td className="px-3 py-2 text-ink-800">{l.item_name}</td>
-                      <td className="px-3 py-2 text-right text-ink-600">{l.quantity}</td>
-                      <td className="px-3 py-2 text-right text-ink-600">{currency(l.unit_price)}</td>
-                      <td className="px-3 py-2 text-right font-medium text-ink-800">{currency(l.quantity * l.unit_price)}</td>
+                      <td className="px-3 py-2 text-ink-800">{it.item_name}</td>
+                      <td className="px-3 py-2 text-right text-ink-600">{it.quantity}</td>
+                      <td className="px-3 py-2 text-right text-ink-600">{currency(it.unit_price)}</td>
+                      <td className="px-3 py-2 text-right font-medium text-ink-800">{currency(it.quantity * it.unit_price)}</td>
                       <td className="px-3 py-2 text-right">
-                        <button onClick={() => removeLine(l._key)} className="text-ink-400 hover:text-rose-600">
+                        <button onClick={() => removeItem(it._key)} className="text-ink-400 hover:text-rose-600">
                           <Trash2 size={14} />
                         </button>
                       </td>
@@ -400,216 +382,29 @@ export default function DailyEntry() {
                 </tbody>
               </table>
             </div>
-          )}
-
-          <div className="flex items-center justify-between border-t border-ink-100 pt-4">
-            <div className="text-xs text-ink-500 space-x-4">
-              <span>
-                Sales: <span className="font-semibold text-teal-700">{currency(totals.sales)}</span>
-              </span>
-              <span>
-                Purchases: <span className="font-semibold text-amber-700">{currency(totals.purchases)}</span>
-              </span>
-              <span>
-                Net: <span className="font-semibold text-ink-800">{currency(totals.net)}</span>
-              </span>
-            </div>
-            <button
-              onClick={saveDay}
-              disabled={saving || lines.length === 0}
-              className="bg-brand-600 hover:bg-brand-700 disabled:opacity-50 text-white text-sm font-semibold px-4 py-2 rounded-lg transition"
-            >
-              {saving ? 'Saving...' : `Save day (${lines.length})`}
-            </button>
           </div>
-        </div>
-
-        <div className="flex flex-col gap-6">
-          {/* Product catalog */}
-          <div className="bg-white rounded-xl border border-ink-200 p-5">
-            <p className="text-sm font-semibold text-ink-900 mb-1 flex items-center gap-1.5">
-              <Package size={15} /> Product catalog
-            </p>
-            <p className="text-xs text-ink-500 mb-3">
-              Set up your products once — they'll appear in the dropdown above every time you log a sale or purchase.
-            </p>
-
-            <div className="flex flex-wrap gap-2 mb-3">
-              <input
-                placeholder="Product name"
-                value={productForm.name}
-                onChange={(e) => setProductForm((f) => ({ ...f, name: e.target.value }))}
-                className="flex-1 min-w-[110px] border border-ink-200 rounded-lg px-2.5 py-1.5 text-sm"
-              />
-              <input
-                placeholder="Category"
-                value={productForm.category}
-                onChange={(e) => setProductForm((f) => ({ ...f, category: e.target.value }))}
-                className="w-24 border border-ink-200 rounded-lg px-2.5 py-1.5 text-sm"
-              />
-              <input
-                type="number"
-                min={0}
-                step="0.01"
-                placeholder="Price"
-                value={productForm.default_unit_price || ''}
-                onChange={(e) => setProductForm((f) => ({ ...f, default_unit_price: Number(e.target.value) }))}
-                className="w-20 border border-ink-200 rounded-lg px-2.5 py-1.5 text-sm"
-              />
-              <button
-                onClick={addProduct}
-                disabled={savingProduct}
-                className="flex items-center gap-1 bg-ink-900 hover:bg-ink-800 disabled:opacity-50 text-white text-xs font-semibold px-3 py-1.5 rounded-lg transition"
-              >
-                <Plus size={13} /> Add
-              </button>
-            </div>
-
-            {loadingProducts ? (
-              <p className="text-sm text-ink-500">Loading...</p>
-            ) : products.length === 0 ? (
-              <p className="text-sm text-ink-500">No products yet — add your first one above.</p>
-            ) : (
-              <div className="space-y-1.5 max-h-56 overflow-y-auto">
-                {products.map((p) => (
-                  <div key={p.id} className="flex items-center justify-between px-3 py-1.5 rounded-lg text-sm bg-ink-50">
-                    <div>
-                      <p className="text-ink-800 font-medium">{p.name}</p>
-                      {(p.category || p.default_unit_price > 0) && (
-                        <p className="text-xs text-ink-400">
-                          {p.category}
-                          {p.category && p.default_unit_price > 0 ? ' · ' : ''}
-                          {p.default_unit_price > 0 ? currency(p.default_unit_price) : ''}
-                        </p>
-                      )}
-                    </div>
-                    <button onClick={() => removeProduct(p.id)} className="text-ink-400 hover:text-rose-600">
-                      <Trash2 size={14} />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* Stock panel */}
-          <div className="bg-white rounded-xl border border-ink-200 p-5">
-          <p className="text-sm font-semibold text-ink-900 mb-1">Current stock</p>
-          <p className="text-xs text-ink-500 mb-4">Purchased minus sold, across everything logged so far.</p>
-          {loading ? (
-            <p className="text-sm text-ink-500">Loading...</p>
-          ) : stock.length === 0 ? (
-            <p className="text-sm text-ink-500">No items logged yet.</p>
-          ) : (
-            <div className="space-y-2 max-h-96 overflow-y-auto">
-              {stock.map((s) => (
-                <div
-                  key={s.item_name}
-                  className={`flex items-center justify-between px-3 py-2 rounded-lg text-sm ${
-                    s.low_stock ? 'bg-rose-50' : 'bg-ink-50'
-                  }`}
-                >
-                  <div>
-                    <p className="text-ink-800 font-medium">{s.item_name}</p>
-                    {s.category && <p className="text-xs text-ink-400">{s.category}</p>}
-                  </div>
-                  <div className="text-right">
-                    <p className={`font-semibold ${s.low_stock ? 'text-rose-700' : 'text-ink-800'}`}>
-                      {s.quantity_on_hand}
-                    </p>
-                    {s.low_stock && (
-                      <p className="text-xs text-rose-600 flex items-center gap-1 justify-end">
-                        <AlertTriangle size={11} /> Low stock
-                      </p>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-          </div>
-        </div>
-      </div>
-
-      {/* Day log */}
-      <div className="bg-white rounded-xl border border-ink-200 mt-6">
-        <div className="px-5 py-4 border-b border-ink-200">
-          <p className="text-sm font-semibold text-ink-900">Recent days</p>
-        </div>
-        {loading ? (
-          <p className="text-sm text-ink-500 px-5 py-4">Loading...</p>
-        ) : days.length === 0 ? (
-          <p className="text-sm text-ink-500 px-5 py-4">No days logged yet — add your first entries above.</p>
-        ) : (
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-left text-xs text-ink-500 border-b border-ink-200">
-                <th className="px-5 py-3 font-medium">Day</th>
-                <th className="px-5 py-3 font-medium text-right">Sales</th>
-                <th className="px-5 py-3 font-medium text-right">Purchases</th>
-                <th className="px-5 py-3 font-medium text-right">Net profit</th>
-                <th className="px-5 py-3 font-medium text-right">Lines</th>
-                <th className="px-5 py-3"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {days.map((d) => (
-                <Fragment key={d.entry_date}>
-                  <tr
-                    onClick={() => openDay(d.entry_date)}
-                    className="border-b border-ink-100 cursor-pointer hover:bg-ink-50"
-                  >
-                    <td className="px-5 py-3 text-ink-800 font-medium">{formatDate(d.entry_date)}</td>
-                    <td className="px-5 py-3 text-right text-teal-700">{currency(d.total_sales)}</td>
-                    <td className="px-5 py-3 text-right text-amber-700">{currency(d.total_purchases)}</td>
-                    <td className={`px-5 py-3 text-right font-medium ${d.net_profit >= 0 ? 'text-ink-800' : 'text-rose-600'}`}>
-                      {currency(d.net_profit)}
-                    </td>
-                    <td className="px-5 py-3 text-right text-ink-500">{d.entry_count}</td>
-                    <td className="px-5 py-3 text-right text-ink-400">
-                      {expandedDay === d.entry_date ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-                    </td>
-                  </tr>
-                  {expandedDay === d.entry_date && (
-                    <tr>
-                      <td colSpan={6} className="bg-ink-50 px-5 py-3">
-                        {loadingDay ? (
-                          <p className="text-xs text-ink-500">Loading...</p>
-                        ) : (
-                          <div className="space-y-1.5">
-                            {dayEntries.map((e) => (
-                              <div key={e.id} className="flex items-center justify-between text-xs bg-white rounded-lg px-3 py-2 border border-ink-100">
-                                <div className="flex items-center gap-2">
-                                  <span
-                                    className={`font-semibold px-2 py-0.5 rounded-full ${
-                                      e.entry_type === 'sale' ? 'text-teal-700 bg-teal-100' : 'text-amber-700 bg-amber-100'
-                                    }`}
-                                  >
-                                    {e.entry_type === 'sale' ? 'Sale' : 'Purchase'}
-                                  </span>
-                                  <span className="text-ink-800">{e.item_name}</span>
-                                  <span className="text-ink-400">
-                                    {e.quantity} × {currency(e.unit_price)}
-                                  </span>
-                                </div>
-                                <div className="flex items-center gap-3">
-                                  <span className="font-medium text-ink-800">{currency(e.amount)}</span>
-                                  <button onClick={() => deleteEntry(e.id)} className="text-ink-400 hover:text-rose-600">
-                                    <Trash2 size={13} />
-                                  </button>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </td>
-                    </tr>
-                  )}
-                </Fragment>
-              ))}
-            </tbody>
-          </table>
         )}
+
+        <div className="flex items-center justify-between border-t border-ink-100 pt-4">
+          <div className="text-xs text-ink-500 space-x-4">
+            <span>
+              Sales: <span className="font-semibold text-teal-700">{currency(totals.sales)}</span>
+            </span>
+            <span>
+              Purchases: <span className="font-semibold text-amber-700">{currency(totals.purchases)}</span>
+            </span>
+            <span>
+              Net: <span className="font-semibold text-ink-800">{currency(totals.net)}</span>
+            </span>
+          </div>
+          <button
+            onClick={saveDay}
+            disabled={saving || items.length === 0}
+            className="bg-brand-600 hover:bg-brand-700 disabled:opacity-50 text-white text-sm font-semibold px-4 py-2 rounded-lg transition"
+          >
+            {saving ? 'Saving...' : `Save day (${items.length})`}
+          </button>
+        </div>
       </div>
     </div>
   )

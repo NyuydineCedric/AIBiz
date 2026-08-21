@@ -16,6 +16,14 @@ except ImportError:  # pdfplumber is optional at import time; parse_pdf_file che
 
 SUPPORTED_TABULAR = {".csv", ".xlsx", ".xls"}
 SUPPORTED_PDF = {".pdf"}
+SUPPORTED_IMAGE = {".png", ".jpg", ".jpeg", ".webp"}
+
+_IMAGE_MIME_TYPES = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+}
 
 # Matches lines like:
 #   "Total Revenue         4,210,500.00"
@@ -37,6 +45,8 @@ def detect_file_type(filename: str) -> str:
         return "Excel"
     if ext == ".pdf":
         return "PDF"
+    if ext in SUPPORTED_IMAGE:
+        return "Image"
     return "Unknown"
 
 
@@ -458,6 +468,116 @@ def parse_pdf_file(path: str, max_chars: int = 4000) -> Dict[str, Any]:
     }
 
 
+def _extract_json_object(text: str) -> Optional[Dict[str, Any]]:
+    """Gemini is asked to return raw JSON, but sometimes wraps it in a
+    ```json ... ``` fence anyway — strip that, then parse. Returns None if
+    nothing JSON-shaped can be found."""
+    import json
+
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```[a-zA-Z]*\n?", "", cleaned)
+        cleaned = re.sub(r"```\s*$", "", cleaned)
+    cleaned = cleaned.strip()
+
+    # If there's leading/trailing prose around the JSON, grab just the
+    # outermost {...} block.
+    if not cleaned.startswith("{"):
+        start = cleaned.find("{")
+        end = cleaned.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            cleaned = cleaned[start : end + 1]
+
+    try:
+        data = json.loads(cleaned)
+        return data if isinstance(data, dict) else None
+    except (json.JSONDecodeError, ValueError):
+        return None
+
+
+def parse_image_file(path: str, filename: Optional[str] = None) -> Dict[str, Any]:
+    """Sends a photo/scan (receipt, handwritten ledger page, price list,
+    spreadsheet screenshot, etc.) to Gemini's vision model and turns
+    whatever labeled numbers it finds into the same numeric_summary shape
+    the PDF/Excel parsers produce, so every downstream feature (KPIs,
+    risks, forecast, chat) works on an uploaded image exactly like it
+    would on any other file — the rest of the app doesn't need to know
+    the data originally came from a photo."""
+    from . import ai_service
+
+    filename = filename or os.path.basename(path)
+    ext = os.path.splitext(filename)[1].lower()
+    mime_type = _IMAGE_MIME_TYPES.get(ext, "image/jpeg")
+
+    with open(path, "rb") as f:
+        image_bytes = f.read()
+
+    raw_response = ai_service.analyze_image_for_data(image_bytes, mime_type)
+
+    if raw_response is None:
+        # No Gemini client available (missing API key/package) — don't
+        # crash the upload, just land it with an empty-but-valid summary
+        # and an explanatory note so the UI can say why nothing was found.
+        return {
+            "row_count": 0,
+            "column_count": 0,
+            "columns": [],
+            "categorical_columns": [],
+            "numeric_summary": {},
+            "preview": [],
+            "text_excerpt": (
+                "This image couldn't be analyzed because AI image analysis isn't configured "
+                "(no Gemini API key). Ask an admin to set GEMINI_API_KEY, or upload a CSV, "
+                "Excel, or PDF file instead."
+            ),
+            "dataframe": None,
+        }
+
+    parsed = _extract_json_object(raw_response) or {}
+    items = parsed.get("items") or []
+    description = (parsed.get("description") or "").strip()
+
+    numeric_summary: Dict[str, Dict[str, float]] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        label = re.sub(r"\s+", " ", str(item.get("label", "")).strip())
+        value = item.get("value")
+        if not label or value is None:
+            continue
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            continue
+        if label in numeric_summary:
+            continue
+        numeric_summary[label] = {
+            "mean": round(value, 2),
+            "sum": round(value, 2),
+            "min": round(value, 2),
+            "max": round(value, 2),
+            "trend_pct": 0.0,
+            "raw_values": [round(value, 2)],
+        }
+
+    text_excerpt = description or (
+        "No numeric line items were detected in this image."
+        if not numeric_summary
+        else "Image analyzed by AI — see extracted line items."
+    )
+
+    return {
+        "row_count": len(numeric_summary),
+        "column_count": len(numeric_summary),
+        "columns": list(numeric_summary.keys()),
+        "categorical_columns": [],
+        "numeric_summary": numeric_summary,
+        "preview": [],
+        "text_excerpt": text_excerpt,
+        "dataframe": None,
+    }
+
+
 def parse_file(path: str, filename: Optional[str] = None) -> Dict[str, Any]:
     filename = filename or os.path.basename(path)
     ext = os.path.splitext(filename)[1].lower()
@@ -466,5 +586,7 @@ def parse_file(path: str, filename: Optional[str] = None) -> Dict[str, Any]:
         return parse_tabular_file(path)
     if ext in SUPPORTED_PDF:
         return parse_pdf_file(path)
+    if ext in SUPPORTED_IMAGE:
+        return parse_image_file(path, filename)
 
     raise ValueError(f"Unsupported file type: {ext}")

@@ -17,6 +17,8 @@ def _validate_entry(entry: schemas.DailyEntryIn):
         raise HTTPException(status_code=400, detail="Every line needs an item name.")
     if entry.quantity <= 0:
         raise HTTPException(status_code=400, detail="Quantity must be greater than 0.")
+    if entry.quantity != int(entry.quantity):
+        raise HTTPException(status_code=400, detail="Quantity must be a whole number.")
     if entry.unit_price < 0:
         raise HTTPException(status_code=400, detail="Unit price can't be negative.")
 
@@ -33,9 +35,35 @@ def add_day_entries(
     if not payload.entries:
         raise HTTPException(status_code=400, detail="Add at least one line item.")
 
-    created: list[models.DailyEntry] = []
     for entry in payload.entries:
         _validate_entry(entry)
+
+    # A shop can't sell more of an item than it actually has on hand. Start
+    # from real stock (purchased minus sold, from everything logged so far)
+    # and walk through this batch in order — a purchase earlier in the same
+    # batch legitimately covers a sale later in it — rejecting the whole
+    # batch before writing anything the moment a sale would go negative.
+    running_stock = {
+        s["item_name"]: s["quantity_on_hand"]
+        for s in daily_aggregator.compute_stock_levels(db, current_user.organization_id)
+    }
+    for entry in payload.entries:
+        name = entry.item_name.strip()
+        available = running_stock.get(name, 0.0)
+        if entry.entry_type == "sale":
+            if entry.quantity > available:
+                detail = (
+                    f'"{name}" is out of stock.'
+                    if available <= 0
+                    else f'Only {available:g} of "{name}" in stock — can\'t sell {entry.quantity:g}.'
+                )
+                raise HTTPException(status_code=400, detail=detail)
+            running_stock[name] = available - entry.quantity
+        else:
+            running_stock[name] = available + entry.quantity
+
+    created: list[models.DailyEntry] = []
+    for entry in payload.entries:
         row = models.DailyEntry(
             organization_id=current_user.organization_id,
             entry_date=payload.entry_date,

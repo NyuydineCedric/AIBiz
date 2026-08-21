@@ -117,7 +117,13 @@ def rebuild_dataset_from_entries(db: Session, org_id: str) -> Optional[models.Da
         numeric_summary[item_name] = _metric_stats(item_values, days)
 
     kpis = insight_engine.build_kpis(numeric_summary)
-    risks = insight_engine.detect_risks(numeric_summary)
+    # Trend-based risks (detect_risks) can't see physical inventory at all —
+    # add stock-based risks (overstock/expiry, dead stock, low stock,
+    # oversold items) computed from actual purchased-vs-sold quantities, so
+    # something like "still sitting on a pile of rice that isn't selling"
+    # actually shows up, not just big swings in a numeric column.
+    stock_levels = compute_stock_levels(db, org_id)
+    risks = insight_engine.detect_risks(numeric_summary) + insight_engine.detect_stock_risks(stock_levels)
     recommendations = insight_engine.generate_recommendations(risks)
     executive_summary = insight_engine.build_executive_summary(kpis, risks)
     # Built directly (not via build_revenue_trend_series) so it carries real

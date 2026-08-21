@@ -13,6 +13,7 @@ REVENUE_KEYWORDS = ["revenue", "sales", "income"]
 COST_KEYWORDS = ["cost", "expense", "spend", "purchase"]
 CUSTOMER_KEYWORDS = ["customer", "retention", "churn"]
 REGION_KEYWORDS = ["region", "branch", "location", "area", "store"]
+PROFIT_KEYWORDS = ["profit", "net income"]
 
 # Common geographic segment names used in real financial statements (e.g.
 # Apple's 10-Q reports revenue by "Americas", "Europe", "Greater China", etc.
@@ -200,7 +201,7 @@ def build_kpis(numeric_summary: Dict[str, Dict[str, float]]) -> List[Dict[str, s
         kpis.append(
             {
                 "label": col,
-                "value": f"{value:,.2f}",
+                "value": f"{value:,.0f}",
                 "change": f"{'+' if trend >= 0 else ''}{trend}% vs. period start",
                 "trend": trend_label,
             }
@@ -216,8 +217,27 @@ def detect_risks(numeric_summary: Dict[str, Dict[str, float]]) -> List[Dict[str,
         is_cost_like = any(kw in low for kw in COST_KEYWORDS)
         is_revenue_like = any(kw in low for kw in REVENUE_KEYWORDS)
         is_customer_like = any(kw in low for kw in CUSTOMER_KEYWORDS)
+        is_profit_like = any(kw in low for kw in PROFIT_KEYWORDS)
 
-        if is_cost_like and trend > 10:
+        # A current loss is a risk on its own, regardless of trend — even a
+        # profit column that's "improving" is still a risk if it's sitting
+        # below zero right now.
+        current = current_value(stats)
+        if is_profit_like and current is not None and current < 0:
+            risks.append(
+                {
+                    "severity": "High",
+                    "text": f"{col} is currently negative ({current:,.0f}) — the business is operating at a loss.",
+                }
+            )
+        elif is_profit_like and trend < -10:
+            risks.append(
+                {
+                    "severity": "High" if trend < -25 else "Medium",
+                    "text": f"{col} declined {abs(trend)}% across the uploaded period.",
+                }
+            )
+        elif is_cost_like and trend > 10:
             risks.append(
                 {
                     "severity": "High" if trend > 20 else "Medium",
@@ -238,7 +258,7 @@ def detect_risks(numeric_summary: Dict[str, Dict[str, float]]) -> List[Dict[str,
                     "text": f"{col} dropped {abs(trend)}% — possible early churn signal.",
                 }
             )
-        elif not is_cost_like and not is_revenue_like and not is_customer_like and abs(trend) > 25:
+        elif not is_cost_like and not is_revenue_like and not is_customer_like and not is_profit_like and abs(trend) > 25:
             risks.append(
                 {
                     "severity": "Medium",
@@ -248,11 +268,84 @@ def detect_risks(numeric_summary: Dict[str, Dict[str, float]]) -> List[Dict[str,
     return risks[:5]
 
 
+def detect_stock_risks(stock_levels: List[Dict[str, Any]]) -> List[Dict[str, str]]:
+    """Purely trend-based risk detection (detect_risks, above) has no concept
+    of physical inventory — it can't tell that a shop keeps buying rice it
+    isn't selling, which is going to expire or just tie up cash. This looks
+    at actual purchased-vs-sold quantities per item (daily_aggregator's
+    stock calculation) to catch that class of risk instead: stock building
+    up with barely any matching sales, stock that's completely unsold,
+    fast-selling items about to run out, and sales that outnumber recorded
+    purchases (usually a sign a purchase was never logged)."""
+    risks: List[Dict[str, str]] = []
+    for item in stock_levels:
+        name = item["item_name"]
+        purchased = item["quantity_purchased"]
+        sold = item["quantity_sold"]
+        on_hand = item["quantity_on_hand"]
+
+        if purchased <= 0:
+            continue  # never restocked through this system — nothing to assess
+
+        if on_hand < 0:
+            risks.append(
+                {
+                    "severity": "Medium",
+                    "text": (
+                        f"Recorded sales of {name} ({sold:g}) exceed recorded purchases "
+                        f"({purchased:g}) — check that every purchase was logged, or the stock "
+                        "count for this item is off."
+                    ),
+                }
+            )
+        elif sold == 0 and on_hand >= 3:
+            risks.append(
+                {
+                    "severity": "High" if on_hand >= 10 else "Medium",
+                    "text": (
+                        f"{on_hand:g} units of {name} have been purchased but none sold yet — "
+                        "risk of dead stock, and expiry if it's perishable."
+                    ),
+                }
+            )
+        elif sold > 0 and on_hand >= 5 and on_hand > sold * 1.5:
+            risks.append(
+                {
+                    "severity": "High" if on_hand > sold * 3 else "Medium",
+                    "text": (
+                        f"{name} has {on_hand:g} units sitting in stock against only {sold:g} sold "
+                        "so far — buying more than you're selling risks tying up cash or spoilage."
+                    ),
+                }
+            )
+        elif item.get("low_stock") and sold > 0:
+            risks.append(
+                {
+                    "severity": "Medium",
+                    "text": f"{name} is running low ({on_hand:g} left) — restock soon or risk turning customers away.",
+                }
+            )
+
+    order = {"High": 0, "Medium": 1, "Low": 2}
+    risks.sort(key=lambda r: order.get(r["severity"], 1))
+    return risks[:4]
+
+
 def generate_recommendations(risks: List[Dict[str, str]]) -> List[str]:
     recs: List[str] = []
     for risk in risks:
         text = risk["text"].lower()
-        if "rose" in text and "review spend" in text:
+        if "operating at a loss" in text:
+            recs.append(f"Cut costs or raise prices to get back above break-even: {risk['text']}")
+        elif "none sold yet" in text:
+            recs.append(f"Run a promotion or bundle to move slow stock before it goes to waste: {risk['text']}")
+        elif "sitting in stock against only" in text:
+            recs.append(f"Pause further purchases of this item until sales catch up: {risk['text']}")
+        elif "running low" in text:
+            recs.append(f"Restock soon to avoid missed sales: {risk['text']}")
+        elif "exceed recorded purchases" in text:
+            recs.append(f"Double-check your purchase entries for this item: {risk['text']}")
+        elif "rose" in text and "review spend" in text:
             recs.append(f"Audit and trim spend on the category driving: {risk['text']}")
         elif "declined" in text:
             recs.append(f"Investigate the drivers behind: {risk['text']} and consider a targeted promotion.")

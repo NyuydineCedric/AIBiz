@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   Zap,
   Send,
@@ -31,6 +32,12 @@ export default function AskQuestion() {
   const [speakingId, setSpeakingId] = useState<string | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const bodyRef = useRef<HTMLDivElement>(null);
+
+  // "Ask AI" buttons elsewhere (e.g. a risk on the Dashboard) link here with
+  // ?q=<question> so clicking one lands on this page with the question
+  // already asked, rather than making the person retype it.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const autoAskedRef = useRef(false);
 
   // Load the list of chat sessions (one per uploaded document) on mount.
   useEffect(() => {
@@ -135,6 +142,18 @@ export default function AskQuestion() {
       setSending(false);
     }
   };
+
+  // Waits for a chat session to actually be selected (sessions load
+  // asynchronously) before firing the pre-filled question, and only fires
+  // once even if this effect re-runs as sessions/session id settle.
+  useEffect(() => {
+    const q = searchParams.get("q");
+    if (q && activeSessionId && !autoAskedRef.current) {
+      autoAskedRef.current = true;
+      ask(q);
+      setSearchParams({}, { replace: true });
+    }
+  }, [activeSessionId, searchParams]);
 
   const sendChat = () => {
     const val = input.trim();

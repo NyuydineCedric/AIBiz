@@ -109,6 +109,14 @@ class ProductIn(BaseModel):
     default_unit_price: float = 0
 
 
+class ProductUpdate(BaseModel):
+    """All fields optional so a price change (the common case — prices
+    drift up and down over time) doesn't require resending the name too."""
+    name: Optional[str] = None
+    category: Optional[str] = None
+    default_unit_price: Optional[float] = None
+
+
 class ProductOut(BaseModel):
     id: str
     name: str

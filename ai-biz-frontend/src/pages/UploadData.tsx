@@ -68,7 +68,13 @@ export default function UploadData() {
 
   return (
     <div className="p-6">
-      <input ref={fileInputRef} type="file" accept=".csv,.xlsx,.xls,.pdf" className="hidden" onChange={handleFileSelect} />
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".csv,.xlsx,.xls,.pdf,.png,.jpg,.jpeg,.webp,image/*"
+        className="hidden"
+        onChange={handleFileSelect}
+      />
 
       <div
         onDragOver={(e) => {
@@ -88,7 +94,10 @@ export default function UploadData() {
       >
         <UploadCloud size={40} className="text-brand-500 mx-auto mb-3" />
         <p className="text-sm font-semibold text-ink-800">Drag and drop files here</p>
-        <p className="text-xs text-ink-500 mt-1 mb-4">Supports CSV, Excel (.xlsx), and PDF up to 25MB</p>
+        <p className="text-xs text-ink-500 mt-1 mb-4">
+          Supports CSV, Excel (.xlsx), PDF, and photos/screenshots (JPG, PNG, WEBP) up to 25MB — images are read by
+          AI to pull out numbers automatically
+        </p>
         <button
           onClick={() => fileInputRef.current?.click()}
           disabled={uploading}
