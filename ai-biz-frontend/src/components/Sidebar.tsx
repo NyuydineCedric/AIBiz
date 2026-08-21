@@ -7,16 +7,20 @@ import {
   Settings,
   LogOut,
   BarChart,
+  LineChart,
+  NotebookPen,
 } from "lucide-react";
 import Logo from "./Logo";
 import { useAuth } from "../context/AuthContext";
 
 const links = [
   { to: "/app/dashboard", label: "Dashboard", icon: LayoutGrid },
+  { to: "/app/daily-entry", label: "Daily log", icon: NotebookPen },
   { to: "/app/upload", label: "Upload data", icon: Upload },
   { to: "/app/ask", label: "Ask a question", icon: MessageSquare },
   { to: "/app/reports", label: "Reports", icon: FileText },
   { to: "/app/overview", label: "Overview", icon: BarChart },
+  { to: "/app/forecast", label: "Forecast", icon: LineChart },
   { to: "/app/settings", label: "Settings", icon: Settings },
 ];
 

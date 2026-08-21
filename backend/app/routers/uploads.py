@@ -144,3 +144,36 @@ def list_datasets(
         .all()
     )
     return [schemas.DatasetOut.model_validate(d) for d in datasets]
+
+
+@router.delete("/{dataset_id}", status_code=204)
+def delete_dataset(
+    dataset_id: str,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    dataset = (
+        db.query(models.Dataset)
+        .filter(models.Dataset.id == dataset_id, models.Dataset.organization_id == current_user.organization_id)
+        .first()
+    )
+    if not dataset:
+        raise HTTPException(status_code=404, detail="Dataset not found.")
+
+    # Clean up dependent rows first (no cascade configured on these FKs).
+    sessions = db.query(models.ChatSession).filter(models.ChatSession.dataset_id == dataset.id).all()
+    for session in sessions:
+        db.query(models.ChatMessage).filter(models.ChatMessage.session_id == session.id).delete()
+        db.delete(session)
+
+    db.query(models.Insight).filter(models.Insight.dataset_id == dataset.id).delete()
+
+    if dataset.storage_path and os.path.exists(dataset.storage_path):
+        try:
+            os.remove(dataset.storage_path)
+        except OSError as exc:
+            print(f"[uploads] Could not remove file for dataset {dataset.id}: {exc!r}")
+
+    db.delete(dataset)
+    db.commit()
+    return None

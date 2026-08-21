@@ -80,20 +80,46 @@ def _numeric_column_summary(df: pd.DataFrame) -> Dict[str, Dict[str, float]]:
         series = numeric_df[col].dropna()
         if series.empty:
             continue
-        first_mean = first_chunk[col].dropna().mean()
-        last_mean = last_chunk[col].dropna().mean()
-        if pd.isna(first_mean) or first_mean == 0 or pd.isna(last_mean):
-            trend_pct = 0.0
-        else:
-            trend_pct = round(float((last_mean - first_mean) / abs(first_mean)) * 100, 2)
 
-        summary[col] = {
+        if len(series) <= 36:
+            # Small, period-like table (e.g. one row per month) — use the
+            # actual first and last values, same method the PDF parser uses
+            # for its line items, so the same underlying data produces the
+            # same trend % regardless of whether it was uploaded as a PDF
+            # or a spreadsheet.
+            first_val = float(series.iloc[0])
+            last_val = float(series.iloc[-1])
+            if first_val == 0:
+                trend_pct = 0.0
+            else:
+                trend_pct = round(((last_val - first_val) / abs(first_val)) * 100, 2)
+        else:
+            # Larger, transaction-level dataset — a single first/last row
+            # would be noisy, so compare the average of the first third of
+            # rows to the average of the last third instead.
+            first_mean = first_chunk[col].dropna().mean()
+            last_mean = last_chunk[col].dropna().mean()
+            if pd.isna(first_mean) or first_mean == 0 or pd.isna(last_mean):
+                trend_pct = 0.0
+            else:
+                trend_pct = round(float((last_mean - first_mean) / abs(first_mean)) * 100, 2)
+
+        entry = {
             "mean": round(float(series.mean()), 2),
             "sum": round(float(series.sum()), 2),
             "min": round(float(series.min()), 2),
             "max": round(float(series.max()), 2),
             "trend_pct": trend_pct,
         }
+        # Capture per-row values too (in original row order) so a "current
+        # value" for this column can use the most recent row instead of a
+        # sum across every row — only meaningful (and only stored) for
+        # small, period-like tables (e.g. one row per month); large,
+        # transaction-level datasets skip this since insight_engine only
+        # ever consults it for small row counts anyway.
+        if len(series) <= 200:
+            entry["raw_values"] = [round(float(v), 2) for v in series.tolist()]
+        summary[col] = entry
     return summary
 
 
@@ -196,6 +222,14 @@ _FOOTNOTE_TOKEN_RE = re.compile(r"^\((?:\d{1,2}|[a-z])\)$", re.IGNORECASE)
 _DASH_ONLY_RE = re.compile(r"^[—–]+$")
 _DATE_LABEL_RE = re.compile(r"^(january|february|march|april|may|june|july|august|september|october|november|december)\b", re.IGNORECASE)
 
+# A bare 4-digit token like "2025" or "2026." with no comma, decimal, $, or
+# parens is almost always a calendar year mentioned in prose (e.g. "...early
+# fiscal 2026.") rather than a real financial figure — real financial values
+# in that range are virtually always comma-formatted ("2,025") or otherwise
+# marked. Used to strip stray year mentions that would otherwise get parsed
+# as trailing numeric line-item values from wrapped narrative text.
+_BARE_YEAR_RE = re.compile(r"^(19|20)\d{2}\.?$")
+
 
 def _extract_rows_by_position(path: str) -> List[str]:
     """Reconstruct logical table rows using each word's vertical position on
@@ -287,6 +321,13 @@ def _extract_line_items_from_rows(rows: List[str]) -> Dict[str, Dict[str, float]
         if not num_tokens:
             continue
 
+        # Drop stray calendar-year mentions picked up from wrapped narrative
+        # text (e.g. "...targeted for early fiscal 2026.") so they aren't
+        # mistaken for real financial figures.
+        num_tokens = [t for t in num_tokens if not _BARE_YEAR_RE.match(t)]
+        if not num_tokens:
+            continue
+
         values = [v for v in (_clean_number(t) for t in num_tokens) if v is not None]
         if not values:
             continue
@@ -328,7 +369,9 @@ def _extract_line_items_from_text(text: str) -> Dict[str, Dict[str, float]]:
             continue
 
         label = match.group(1).strip()
-        number_tokens = _NUMBER_TOKEN_RE.findall(match.group(2))
+        number_tokens = [t for t in _NUMBER_TOKEN_RE.findall(match.group(2)) if not _BARE_YEAR_RE.match(t)]
+        if not number_tokens:
+            continue
         values = [v for v in (_clean_number(t) for t in number_tokens) if v is not None]
         if not values:
             continue

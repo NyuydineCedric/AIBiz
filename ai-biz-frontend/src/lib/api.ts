@@ -65,6 +65,7 @@ export type DashboardSummary = {
   executive_summary: string
   revenue_trend: Series
   region_breakdown: Series
+  forecast: Series
   risks: Insight[]
   recommendations: Insight[]
 }
@@ -103,6 +104,31 @@ export type NotificationPreferences = {
   forecast_updates: boolean
 }
 export type Organization = { name: string; industry: string }
+export type MetricSeries = {
+  metric_label: string
+  actual: Series
+  forecast_labels: string[]
+  forecast_values: number[]
+  lower_bound: number[]
+  upper_bound: number[]
+  trend: 'up' | 'down' | 'flat'
+  slope_per_period: number
+}
+export type ForecastDetail = {
+  has_data: boolean
+  series: MetricSeries[]
+  note: string
+  ai_insight: string
+  // Mirrors series[0] — kept for any code still reading the old shape.
+  actual: Series
+  forecast_labels: string[]
+  forecast_values: number[]
+  lower_bound: number[]
+  upper_bound: number[]
+  trend: 'up' | 'down' | 'flat'
+  slope_per_period: number
+  metric_label: string
+}
 
 // ---------- Auth ----------
 
@@ -145,10 +171,111 @@ export function listUploads() {
   return request<Dataset[]>('/api/uploads')
 }
 
+export function deleteDataset(datasetId: string) {
+  return request<void>(`/api/uploads/${datasetId}`, { method: 'DELETE' })
+}
+
 // ---------- Dashboard ----------
 
 export function getDashboardSummary() {
   return request<DashboardSummary>('/api/dashboard/summary')
+}
+
+export function getForecast(periodsAhead = 7) {
+  return request<ForecastDetail>(`/api/dashboard/forecast?periods_ahead=${periodsAhead}`)
+}
+
+// ---------- Daily Entry ----------
+
+export type EntryType = 'sale' | 'purchase'
+
+export type DailyEntryLine = {
+  entry_type: EntryType
+  item_name: string
+  category?: string
+  quantity: number
+  unit_price: number
+  notes?: string
+}
+
+export type DailyEntry = {
+  id: string
+  entry_date: string
+  entry_type: EntryType
+  item_name: string
+  category: string
+  quantity: number
+  unit_price: number
+  amount: number
+  notes: string
+  created_at: string
+}
+
+export type DaySummary = {
+  entry_date: string
+  total_sales: number
+  total_purchases: number
+  net_profit: number
+  entry_count: number
+}
+
+export type StockItem = {
+  item_name: string
+  category: string
+  quantity_purchased: number
+  quantity_sold: number
+  quantity_on_hand: number
+  low_stock: boolean
+}
+
+export function addDailyEntries(entryDate: string, lines: DailyEntryLine[]) {
+  return request<DailyEntry[]>('/api/daily/entries', {
+    method: 'POST',
+    body: JSON.stringify({ entry_date: entryDate, entries: lines }),
+  })
+}
+
+export function listDailyEntries(entryDate?: string) {
+  const qs = entryDate ? `?entry_date=${entryDate}` : ''
+  return request<DailyEntry[]>(`/api/daily/entries${qs}`)
+}
+
+export function deleteDailyEntry(entryId: string) {
+  return request<void>(`/api/daily/entries/${entryId}`, { method: 'DELETE' })
+}
+
+export function listDailyDays(limit = 30) {
+  return request<DaySummary[]>(`/api/daily/days?limit=${limit}`)
+}
+
+export function getStockLevels(lowStockThreshold = 5) {
+  return request<StockItem[]>(`/api/daily/stock?low_stock_threshold=${lowStockThreshold}`)
+}
+
+export function rebuildDailyDataset() {
+  return request<Dataset | null>('/api/daily/rebuild', { method: 'POST' })
+}
+
+// ---------- Products (catalog) ----------
+
+export type Product = {
+  id: string
+  name: string
+  category: string
+  default_unit_price: number
+  created_at: string
+}
+
+export function listProducts() {
+  return request<Product[]>('/api/products')
+}
+
+export function addProduct(payload: { name: string; category?: string; default_unit_price?: number }) {
+  return request<Product>('/api/products', { method: 'POST', body: JSON.stringify(payload) })
+}
+
+export function deleteProduct(productId: string) {
+  return request<void>(`/api/products/${productId}`, { method: 'DELETE' })
 }
 
 // ---------- Chat ----------

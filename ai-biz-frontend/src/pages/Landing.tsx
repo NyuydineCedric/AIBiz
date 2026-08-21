@@ -7,7 +7,7 @@ import {
   Zap,
 } from "lucide-react";
 import Logo from "../components/Logo";
-import imageUrl from "../components/bgs.jpg";
+import imageUrl from "../components/mages.jpg";
 
 const features = [
   {
@@ -88,7 +88,7 @@ export default function Landing() {
         <h1 className="text-4xl text-white md:text-6xl font-extrabold text-ink-900 tracking-tight leading-[1.1] max-w-4xl mx-auto">
           Turn your business data into decisions, automatically
         </h1>
-        <p className="mt-6  text-lg text-ink-600 max-w-2xl mx-auto">
+        <p className="mt-6  text-lg text-ink-600 max-w-2xl mx-auto text-white">
           Upload your sales, financial, and operational data. AI Biz explains
           what's happening, why it's happening, and what to do next — no analyst
           required.

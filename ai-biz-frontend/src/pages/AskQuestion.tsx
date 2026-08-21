@@ -7,8 +7,18 @@ import {
   MessageSquare,
   FileText,
   Upload,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
 import * as api from "../lib/api";
+
+const QUICK_QUESTIONS = [
+  "What's the revenue forecast for next quarter?",
+  "Which region is performing best?",
+  "What are the biggest risks right now?",
+  "Where are costs rising the fastest?",
+  "What should we do to improve performance?",
+];
 
 export default function AskQuestion() {
   const [sessions, setSessions] = useState<api.ChatSession[]>([]);
@@ -19,6 +29,7 @@ export default function AskQuestion() {
   const [loadingSessions, setLoadingSessions] = useState(true);
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [speakingId, setSpeakingId] = useState<string | null>(null);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const bodyRef = useRef<HTMLDivElement>(null);
 
   // Load the list of chat sessions (one per uploaded document) on mount.
@@ -136,24 +147,59 @@ export default function AskQuestion() {
 
   return (
     <div className="p-6 flex gap-4 h-[calc(100vh-96px)]">
-      {/* Sidebar: chat history, one entry per uploaded document */}
-      <div className="w-72 shrink-0 bg-white rounded-xl border border-ink-200 flex flex-col overflow-hidden">
-        <div className="px-4 py-3 border-b border-ink-200">
-          <p className="text-sm font-semibold text-ink-900">Chats</p>
-          <p className="text-xs text-ink-500">
-            One thread per uploaded document
-          </p>
+      {/* Sidebar: chat history, one entry per uploaded document. Collapsible
+          down to a slim icon rail so it doesn't eat space from the chat. */}
+      <div
+        className={`shrink-0 bg-white rounded-xl border border-ink-200 flex flex-col overflow-hidden transition-all duration-200 ${
+          sidebarCollapsed ? "w-14" : "w-80"
+        }`}
+      >
+        <div
+          className={`border-b border-ink-200 flex items-center ${
+            sidebarCollapsed ? "justify-center py-4" : "justify-between px-5 py-4"
+          }`}
+        >
+          {!sidebarCollapsed && (
+            <div className="min-w-0">
+              <p className="text-base font-semibold text-ink-900">Chats</p>
+              <p className="text-sm text-ink-500">One thread per uploaded document</p>
+            </div>
+          )}
+          <button
+            type="button"
+            onClick={() => setSidebarCollapsed((v) => !v)}
+            title={sidebarCollapsed ? "Expand chats" : "Collapse chats"}
+            className="shrink-0 w-7 h-7 rounded-lg flex items-center justify-center text-ink-400 hover:text-brand-600 hover:bg-brand-50 transition"
+          >
+            {sidebarCollapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
+          </button>
         </div>
         <div className="flex-1 overflow-y-auto">
           {loadingSessions ? (
-            <p className="text-xs text-ink-500 px-4 py-3">Loading chats...</p>
+            !sidebarCollapsed && <p className="text-xs text-ink-500 px-4 py-3">Loading chats...</p>
           ) : sessions.length === 0 ? (
-            <div className="px-4 py-6 text-center">
-              <Upload size={22} className="text-ink-300 mx-auto mb-2" />
-              <p className="text-xs text-ink-500">
-                Upload a document to start your first chat.
-              </p>
-            </div>
+            !sidebarCollapsed && (
+              <div className="px-4 py-6 text-center">
+                <Upload size={22} className="text-ink-300 mx-auto mb-2" />
+                <p className="text-xs text-ink-500">Upload a document to start your first chat.</p>
+              </div>
+            )
+          ) : sidebarCollapsed ? (
+            sessions.map((s) => (
+              <button
+                key={s.id}
+                onClick={() => setActiveSessionId(s.id)}
+                title={s.title}
+                className={`w-full flex items-center justify-center py-3 border-b border-ink-100 transition ${
+                  s.id === activeSessionId ? "bg-brand-50" : "hover:bg-ink-50"
+                }`}
+              >
+                <MessageSquare
+                  size={16}
+                  className={s.id === activeSessionId ? "text-brand-600" : "text-ink-400"}
+                />
+              </button>
+            ))
           ) : (
             sessions.map((s) => (
               <button
@@ -194,21 +240,21 @@ export default function AskQuestion() {
       <div className="flex-1 bg-white rounded-xl border border-ink-200 flex flex-col min-w-0">
         {!activeSession ? (
           <div className="flex-1 flex items-center justify-center text-sm text-ink-500 px-6 text-center">
-            Upload a business report to start a chat about it.
+            Log a day of sales/purchases, or upload a business report, to start a chat about it.
           </div>
         ) : (
           <>
-            <div className="px-5 py-3.5 border-b border-ink-200">
-              <p className="text-sm font-semibold text-ink-900">
+            <div className="px-6 py-4 border-b border-ink-200">
+              <p className="text-base font-semibold text-ink-900">
                 {activeSession.title}
               </p>
               {activeSession.dataset_filename && (
-                <p className="text-xs text-ink-500">
+                <p className="text-sm text-ink-500">
                   {activeSession.dataset_filename}
                 </p>
               )}
             </div>
-            <div ref={bodyRef} className="flex-1 overflow-y-auto p-6 space-y-5">
+            <div ref={bodyRef} className="flex-1 overflow-y-auto p-8 space-y-6">
               {loadingMessages ? (
                 <p className="text-sm text-ink-500">Loading conversation...</p>
               ) : messages.length === 0 ? (
@@ -220,17 +266,17 @@ export default function AskQuestion() {
                 messages.map((m) =>
                   m.role === "user" ? (
                     <div key={m.id} className="flex justify-end">
-                      <div className="bg-brand-600 text-white text-sm rounded-2xl rounded-tr-sm px-4 py-2.5 max-w-md">
+                      <div className="bg-brand-600 text-white text-base rounded-2xl rounded-tr-sm px-5 py-3.5 max-w-2xl leading-relaxed">
                         {m.text}
                       </div>
                     </div>
                   ) : (
-                    <div key={m.id} className="flex items-start gap-2.5">
-                      <div className="w-7 h-7 rounded-full bg-brand-600 flex items-center justify-center shrink-0 mt-0.5">
-                        <Zap size={14} className="text-white" />
+                    <div key={m.id} className="flex items-start gap-3">
+                      <div className="w-9 h-9 rounded-full bg-brand-600 flex items-center justify-center shrink-0 mt-0.5">
+                        <Zap size={18} className="text-white" />
                       </div>
-                      <div className="flex items-end gap-1.5 max-w-md">
-                        <div className="bg-ink-100 text-ink-800 text-sm rounded-2xl rounded-tl-sm px-4 py-2.5">
+                      <div className="flex items-end gap-2 max-w-2xl">
+                        <div className="bg-ink-100 text-ink-800 text-base rounded-2xl rounded-tl-sm px-5 py-3.5 leading-relaxed">
                           {m.text}
                         </div>
                         <button
@@ -239,12 +285,12 @@ export default function AskQuestion() {
                           title={
                             speakingId === m.id ? "Stop reading" : "Read aloud"
                           }
-                          className="shrink-0 mb-1 w-6 h-6 rounded-full flex items-center justify-center text-ink-400 hover:text-brand-600 hover:bg-brand-50 transition"
+                          className="shrink-0 mb-1 w-7 h-7 rounded-full flex items-center justify-center text-ink-400 hover:text-brand-600 hover:bg-brand-50 transition"
                         >
                           {speakingId === m.id ? (
-                            <VolumeX size={14} />
+                            <VolumeX size={16} />
                           ) : (
-                            <Volume2 size={14} />
+                            <Volume2 size={16} />
                           )}
                         </button>
                       </div>
@@ -253,37 +299,50 @@ export default function AskQuestion() {
                 )
               )}
               {sending && (
-                <div className="flex items-start gap-2.5">
-                  <div className="w-7 h-7 rounded-full bg-brand-600 flex items-center justify-center shrink-0 mt-0.5">
-                    <Zap size={14} className="text-white" />
+                <div className="flex items-start gap-3">
+                  <div className="w-9 h-9 rounded-full bg-brand-600 flex items-center justify-center shrink-0 mt-0.5">
+                    <Zap size={18} className="text-white" />
                   </div>
-                  <div className="bg-ink-100 text-ink-500 text-sm rounded-2xl rounded-tl-sm px-4 py-2.5">
+                  <div className="bg-ink-100 text-ink-500 text-base rounded-2xl rounded-tl-sm px-5 py-3.5">
                     Thinking...
                   </div>
                 </div>
               )}
             </div>
             <div className="border-t border-ink-200 p-4">
+              <div className="flex gap-2 mb-3 overflow-x-auto whitespace-nowrap pb-1 [scrollbar-width:thin]">
+                {QUICK_QUESTIONS.map((q) => (
+                  <button
+                    key={q}
+                    type="button"
+                    onClick={() => ask(q)}
+                    disabled={sending}
+                    className="shrink-0 text-sm text-brand-700 bg-brand-50 hover:bg-brand-100 disabled:opacity-60 border border-brand-100 rounded-full px-3.5 py-1.5 transition"
+                  >
+                    {q}
+                  </button>
+                ))}
+              </div>
               <form
                 onSubmit={(e) => {
                   e.preventDefault();
                   sendChat();
                 }}
-                className="flex gap-2"
+                className="flex gap-3"
               >
                 <input
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
                   type="text"
                   placeholder={`Ask about ${activeSession.dataset_filename ?? "this document"}...`}
-                  className="flex-1 border border-ink-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500"
+                  className="flex-1 border border-ink-300 rounded-lg px-4 py-3 text-base focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500"
                 />
                 <button
                   type="submit"
                   disabled={sending}
-                  className="bg-brand-600 hover:bg-brand-700 disabled:opacity-60 text-white px-4 py-2.5 rounded-lg transition"
+                  className="bg-brand-600 hover:bg-brand-700 disabled:opacity-60 text-white px-5 py-3 rounded-lg transition"
                 >
-                  <Send size={16} />
+                  <Send size={18} />
                 </button>
               </form>
             </div>

@@ -3,13 +3,14 @@ an executive summary, and simple chart-ready series. Uses keyword heuristics
 to guess which columns represent revenue, cost, customers, etc. so it works on
 arbitrary business spreadsheets without a fixed schema.
 """
-from typing import Any, Dict, List
+from datetime import date, timedelta
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 import pandas as pd
 
 REVENUE_KEYWORDS = ["revenue", "sales", "income"]
-COST_KEYWORDS = ["cost", "expense", "spend"]
+COST_KEYWORDS = ["cost", "expense", "spend", "purchase"]
 CUSTOMER_KEYWORDS = ["customer", "retention", "churn"]
 REGION_KEYWORDS = ["region", "branch", "location", "area", "store"]
 
@@ -31,6 +32,139 @@ def _match_column(columns: List[str], keywords: List[str]) -> str | None:
         if any(kw in low for kw in keywords):
             return col
     return None
+
+
+def week_of_month(d: date) -> int:
+    """1-based week number within d's own month (day 1-7 -> Week 1, 8-14 ->
+    Week 2, etc.) — resets every month rather than counting continuously,
+    matching how a shop owner naturally thinks about "week 2 of August"."""
+    return ((d.day - 1) // 7) + 1
+
+
+def day_label(d: date) -> str:
+    """e.g. "Aug Wk1 Mon" — used anywhere a chart shows daily-log data, so
+    points read as real calendar days instead of anonymous "Day N" ticks.
+    The month prefix disambiguates "Week 1" across different months."""
+    return f"{d.strftime('%b')} Wk{week_of_month(d)} {d.strftime('%a')}"
+
+
+def continue_day_labels(period_dates: Optional[List[str]], count: int) -> List[str]:
+    """Extends a real date sequence (ISO strings, e.g. from a metric's
+    period_dates) forward by `count` more calendar days, formatted the same
+    way as day_label — used for the forecast (projected) segment of a chart
+    so it reads as real upcoming days rather than reverting to "Day N"."""
+    if not period_dates:
+        return []
+    try:
+        last = date.fromisoformat(period_dates[-1])
+    except (ValueError, TypeError):
+        return []
+    return [day_label(last + timedelta(days=i)) for i in range(1, count + 1)]
+
+
+def detect_metric_column(question: str, numeric_summary: Dict[str, Dict[str, float]]) -> str | None:
+    """Best-effort match of a natural-language question to one of the
+    dataset's numeric columns, so the Forecast page can chart whatever
+    metric the user actually asked about (cost, a named line item, etc.)
+    instead of always revenue. Returns None if nothing matches, in which
+    case callers should keep showing the default revenue trend."""
+    if not numeric_summary:
+        return None
+    q = question.lower()
+    columns = list(numeric_summary.keys())
+
+    # 1) The column name itself appears in the question (longest names first,
+    # so a specific line item like "Cost of Goods Sold" wins over a shorter
+    # coincidental match).
+    for col in sorted(columns, key=len, reverse=True):
+        if col.lower() in q:
+            return col
+
+    # 2) Fall back to the same keyword groups used elsewhere in the app.
+    for keywords in (REVENUE_KEYWORDS, COST_KEYWORDS, CUSTOMER_KEYWORDS):
+        if any(kw in q for kw in keywords):
+            col = _match_column(columns, keywords)
+            if col:
+                return col
+
+    return None
+
+
+def detect_metric_columns(
+    question: str, numeric_summary: Dict[str, Dict[str, float]], max_columns: int = 4
+) -> List[str]:
+    """Like detect_metric_column, but returns every distinct column the
+    question appears to name — e.g. "compare Rice and Sugar" matches both —
+    so a chart can plot several metrics/products at once instead of only
+    the single best match. Falls back to one keyword-group match (same
+    logic as detect_metric_column) when no column is literally named, so a
+    single-metric question still returns exactly one column as before."""
+    if not numeric_summary:
+        return []
+    q = question.lower()
+    columns = list(numeric_summary.keys())
+
+    # Every column name literally present in the question, longest names
+    # first so a specific line item wins over a shorter coincidental
+    # substring, and so a shorter name that's itself a substring of an
+    # already-matched longer one (e.g. "Sales" inside "Total Sales") isn't
+    # double-counted as a separate match.
+    found: List[str] = []
+    remaining = q
+    for col in sorted(columns, key=len, reverse=True):
+        low = col.lower()
+        if low and low in remaining:
+            found.append(col)
+            remaining = remaining.replace(low, " ")
+        if len(found) >= max_columns:
+            break
+
+    if found:
+        # Re-sort into the order they actually appear in the question (the
+        # longest-first pass above is only for correct matching), so a chart
+        # legend for "compare Rice and Sugar" lists Rice before Sugar.
+        found.sort(key=lambda col: q.find(col.lower()))
+        return found
+
+    for keywords in (REVENUE_KEYWORDS, COST_KEYWORDS, CUSTOMER_KEYWORDS):
+        if any(kw in q for kw in keywords):
+            col = _match_column(columns, keywords)
+            if col:
+                return [col]
+
+    return []
+
+
+def current_value(stats: Dict[str, float]) -> float:
+    """The "right now" figure for a line item, for display anywhere the UI
+    says "currently at X" (KPI cards, region breakdowns, chatbot answers).
+
+    For PDF/spreadsheet line items and daily-log metrics alike, we capture
+    the actual per-period values (raw_values), e.g. one figure per reporting
+    period or per logged day — in that case "current" should be the most
+    recent period's real figure, not a sum across every period (summing a
+    year of daily "Total Sales" produces a number that was never true on any
+    single day, and is flatly wrong for a stock-like metric such as
+    "Customer Count" or "Quantity on Hand"). raw_values is only ever
+    populated for genuinely period-like data (data_parser caps tabular
+    uploads at 200 rows before setting it at all), so no length cap is
+    needed here — falls back to the old sum/mean heuristic only when no
+    per-period values were captured at all, where "sum" over many
+    transaction rows is a meaningful total.
+    """
+    raw_values = stats.get("raw_values")
+    if raw_values:
+        # A trailing 0 on a per-item daily-log series usually just means
+        # "nothing logged for this specific item on those most-recent days"
+        # (a shop rarely sells every product every day) rather than a
+        # genuine crash to zero — so walk back to the most recent day this
+        # line item actually had a real figure. Only report a literal 0
+        # when the entire history is 0.
+        for v in reversed(raw_values):
+            if v:
+                return v
+        return raw_values[-1]
+    return stats["sum"] if stats.get("sum", 0) >= stats.get("mean", 0) else stats.get("mean", 0.0)
 
 
 def build_kpis(numeric_summary: Dict[str, Dict[str, float]]) -> List[Dict[str, str]]:
@@ -62,7 +196,7 @@ def build_kpis(numeric_summary: Dict[str, Dict[str, float]]) -> List[Dict[str, s
         else:
             trend_label = "warn"
 
-        value = stats["sum"] if stats["sum"] >= stats["mean"] else stats["mean"]
+        value = current_value(stats)
         kpis.append(
             {
                 "label": col,
@@ -141,7 +275,7 @@ def generate_recommendations(risks: List[Dict[str, str]]) -> List[str]:
 
 def build_executive_summary(kpis: List[Dict[str, str]], risks: List[Dict[str, str]]) -> str:
     if not kpis:
-        return "Upload a business report (CSV, Excel, or PDF) to generate an AI executive summary."
+        return "Log a day of sales/purchases, or upload a business report (CSV, Excel, or PDF), to generate an AI executive summary."
 
     lead = kpis[0]
     parts = [f"{lead['label']} is at {lead['value']} ({lead['change']})."]
@@ -180,10 +314,15 @@ def _build_revenue_trend_from_summary(numeric_summary: Dict[str, Dict[str, float
         return {"labels": [], "values": []}
 
     raw_values = numeric_summary[target_col].get("raw_values")
-    if not raw_values or len(raw_values) < 2:
+    # Only bail if there's truly no data — a single logged day/period is
+    # still real data worth showing (as a single point, with no forecast
+    # line yet), not an error state. Requiring 2+ points here meant one day
+    # of daily-log entries fell through to a "no revenue column found"
+    # message that had nothing to do with the actual problem.
+    if not raw_values:
         return {"labels": [], "values": []}
 
-    labels = [f"P{i + 1}" for i in range(len(raw_values))]
+    labels = [f"Day {i + 1}" for i in range(len(raw_values))]
     return {"labels": labels, "values": raw_values}
 
 
@@ -206,7 +345,7 @@ def build_revenue_trend_series(df: pd.DataFrame | None, numeric_summary: Dict[st
     buckets = min(6, max(1, len(series)))
     chunks = [pd.Series(c) for c in np.array_split(series.to_numpy(), buckets)]
 
-    labels = [f"P{i + 1}" for i in range(len(chunks))]
+    labels = [f"Day {i + 1}" for i in range(len(chunks))]
     values = [round(float(c.mean()), 2) if len(c) else 0.0 for c in chunks]
     return {"labels": labels, "values": values}
 
@@ -220,7 +359,7 @@ def _build_region_breakdown_from_summary(numeric_summary: Dict[str, Dict[str, fl
     for label, stats in numeric_summary.items():
         low = label.lower().strip()
         if any(low == name or low.startswith(name) for name in KNOWN_REGION_NAMES):
-            matches.append((label, stats.get("sum", stats.get("mean", 0.0))))
+            matches.append((label, current_value(stats)))
 
     if not matches:
         return {"labels": [], "values": []}
@@ -239,7 +378,13 @@ def build_region_breakdown(df: pd.DataFrame | None, categorical_columns: List[st
 
     region_col = _match_column(categorical_columns, REGION_KEYWORDS)
     if not region_col:
-        return {"labels": [], "values": []}
+        # No literal "region"/"branch"/etc. category column — common in
+        # "wide" spreadsheets that break regions out as their own columns
+        # (e.g. "North America", "Europe", "Asia Pacific") rather than a
+        # single category column + amount column. Same fallback the PDF
+        # path uses: match known geography names directly against the
+        # dataset's column names.
+        return _build_region_breakdown_from_summary(numeric_summary)
 
     columns = list(numeric_summary.keys())
     amount_col = _match_column(columns, REVENUE_KEYWORDS) or (columns[0] if columns else None)

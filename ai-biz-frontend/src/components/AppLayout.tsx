@@ -5,10 +5,13 @@ import { useAuth } from '../context/AuthContext'
 
 const titles: Record<string, string> = {
   '/app/dashboard': 'Dashboard',
+  '/app/daily-entry': 'Daily log',
   '/app/upload': 'Upload data',
   '/app/ask': 'Ask a question',
   '/app/reports': 'Reports',
   '/app/settings': 'Settings',
+  '/app/overview': 'Overview',
+  '/app/forecast': 'Forecast',
 }
 
 export default function AppLayout() {

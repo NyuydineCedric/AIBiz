@@ -6,5 +6,24 @@ body {
   font-family: 'Inter', sans-serif;
 }
 
-::-webkit-scrollbar { width: 8px; height: 8px; }
-::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 4px;
+}
+
+/* Continuous flowing line on the revenue chart */
+.revenue-chart-flow .recharts-area:first-of-type .recharts-area-curve {
+  stroke-dasharray: 14 10;
+  animation: flow-dash 1.7s linear infinite;
+}
+
+@keyframes flow-dash {
+  to {
+    stroke-dashoffset: -24;
+  }
+}

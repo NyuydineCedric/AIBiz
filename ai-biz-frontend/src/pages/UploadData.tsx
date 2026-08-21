@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { UploadCloud } from 'lucide-react'
+import { UploadCloud, Trash2 } from 'lucide-react'
 import * as api from '../lib/api'
 
 function formatSize(bytes: number): string {
@@ -16,6 +16,7 @@ export default function UploadData() {
   const [datasets, setDatasets] = useState<api.Dataset[]>([])
   const [loading, setLoading] = useState(true)
   const [uploading, setUploading] = useState(false)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
   const [error, setError] = useState('')
   const [dragOver, setDragOver] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -47,6 +48,22 @@ export default function UploadData() {
     const file = e.target.files?.[0]
     if (file) doUpload(file)
     e.target.value = ''
+  }
+
+  const handleDelete = async (dataset: api.Dataset) => {
+    if (!window.confirm(`Delete "${dataset.filename}"? This also removes its chat history and can't be undone.`)) {
+      return
+    }
+    setError('')
+    setDeletingId(dataset.id)
+    try {
+      await api.deleteDataset(dataset.id)
+      setDatasets((prev) => prev.filter((d) => d.id !== dataset.id))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to delete file.')
+    } finally {
+      setDeletingId(null)
+    }
   }
 
   return (
@@ -102,6 +119,7 @@ export default function UploadData() {
                 <th className="px-5 py-3 font-medium">Size</th>
                 <th className="px-5 py-3 font-medium">Uploaded</th>
                 <th className="px-5 py-3 font-medium">Status</th>
+                <th className="px-5 py-3 font-medium text-right">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -123,6 +141,16 @@ export default function UploadData() {
                     >
                       {d.status === 'parsed' ? 'Parsed' : d.status === 'error' ? 'Error' : 'Processing...'}
                     </span>
+                  </td>
+                  <td className="px-5 py-3 text-right">
+                    <button
+                      onClick={() => handleDelete(d)}
+                      disabled={deletingId === d.id}
+                      aria-label={`Delete ${d.filename}`}
+                      className="inline-flex items-center justify-center w-8 h-8 rounded-lg text-ink-400 hover:text-rose-600 hover:bg-rose-50 disabled:opacity-50 transition"
+                    >
+                      <Trash2 size={16} />
+                    </button>
                   </td>
                 </tr>
               ))}

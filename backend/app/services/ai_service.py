@@ -9,6 +9,7 @@ import re
 from typing import Any, Dict, List, Optional
 
 from ..config import settings
+from .insight_engine import detect_metric_column
 
 _gemini_client = None
 _gemini_init_attempted = False
@@ -20,6 +21,15 @@ _GREETING_RE = re.compile(
     re.IGNORECASE,
 )
 _THANKS_RE = re.compile(r"^(thanks|thank you|thx|ty|cheers|appreciate it)[\s!.,?]*$", re.IGNORECASE)
+
+# Shared with routers/chat.py so a forecast-related question asked in chat
+# can also refresh what's shown on the Forecast page.
+FORECAST_KEYWORDS = ["forecast", "predict", "next day", "next week", "tomorrow", "next period", "projection"]
+
+
+def is_forecast_question(question: str) -> bool:
+    q = question.lower()
+    return any(w in q for w in FORECAST_KEYWORDS)
 
 # Strips common markdown so plain-text chat bubbles don't show literal
 # asterisks/underscores/hashes/backticks from model output.
@@ -102,17 +112,69 @@ def _fallback_answer(question: str, context: Dict[str, Any]) -> str:
                 return k
         return None
 
-    if any(w in q for w in ["forecast", "predict", "next month", "next quarter", "next period"]):
+    if is_forecast_question(q):
+        forecast = context.get("forecast") or {}
+        values = forecast.get("values") or []
+        if values:
+            direction = forecast.get("trend", "flat")
+            word = "trending up" if direction == "up" else "trending down" if direction == "down" else "roughly flat"
+            return (
+                f"Revenue is {word} — the projection puts it at about {values[-1]:,.2f} "
+                f"{len(values)} periods out, based on the trend in your uploaded data."
+            )
         return (
             "Based on the current trend in your data, I can generate a numeric forecast — "
-            "check the Reports tab for a full forecast report, or ask me about a specific metric."
+            "check the Forecast page for a full projection, or ask me about a specific metric."
         )
+
+    # Check for a direct hit on any individual line item from the dataset
+    # (not just the handful surfaced as top KPIs) before falling through to
+    # the broader keyword buckets below, so a question naming a specific
+    # metric — e.g. "New Product Line Revenue" — gets answered with real
+    # numbers even if that metric isn't one of the curated dashboard KPIs.
+    metrics = context.get("metrics") or {}
+    if metrics:
+        metric_col = detect_metric_column(question, metrics)
+        if metric_col:
+            stats = metrics[metric_col]
+            value = stats.get("value")
+            trend = stats.get("trend_pct")
+            if value is not None and trend is not None:
+                direction = "up" if trend > 0 else "down" if trend < 0 else "flat"
+                sign = "+" if trend >= 0 else ""
+                return (
+                    f"{metric_col} is currently at {value:,.2f}, {sign}{trend:.1f}% "
+                    f"({direction}) across the uploaded period."
+                )
 
     if any(w in q for w in ["branch", "region", "location", "underperform", "which store"]):
         region = context.get("region_breakdown", {})
         if region.get("labels"):
-            lowest_idx = region["values"].index(min(region["values"]))
-            return f"{region['labels'][lowest_idx]} is the lowest-performing region in your uploaded data, at {region['values'][lowest_idx]:,.2f}."
+            wants_worst = any(w in q for w in ["worst", "lowest", "underperform", "struggling", "weakest"])
+            trends = context.get("region_trends") or {}
+
+            if trends:
+                # "Best/worst performing" means growing/shrinking fastest,
+                # not just largest/smallest by current total.
+                label = min(trends, key=trends.get) if wants_worst else max(trends, key=trends.get)
+                pct = trends[label]
+                sign = "+" if pct >= 0 else ""
+                qualifier = "worst-trending" if wants_worst else "best-trending"
+                value = None
+                if label in region["labels"]:
+                    value = region["values"][region["labels"].index(label)]
+                value_part = f" (currently at {value:,.2f})" if value is not None else ""
+                return f"{label} is the {qualifier} region in your uploaded data, {sign}{pct:.1f}% over the period{value_part}."
+
+            # No trend data available (e.g. region breakdown grouped from a
+            # plain category column) — fall back to comparing current totals.
+            if wants_worst:
+                idx = region["values"].index(min(region["values"]))
+                qualifier = "lowest-performing"
+            else:
+                idx = region["values"].index(max(region["values"]))
+                qualifier = "best-performing"
+            return f"{region['labels'][idx]} is the {qualifier} region in your uploaded data, at {region['values'][idx]:,.2f}."
         return "I don't see a region or branch column in your uploaded data yet."
 
     if any(w in q for w in ["risk", "wrong", "problem", "concern"]):
@@ -160,7 +222,10 @@ def answer_question(question: str, context: Dict[str, Any]) -> str:
             "You are an AI business analyst embedded in a dashboard app. Answer the user's "
             "question. If it relates to their business, use ONLY the JSON business data context "
             "below and be concise (2-3 sentences), specific, and reference actual numbers where "
-            "relevant. If it's a general question unrelated to the data, just answer it normally "
+            "relevant. The 'metrics' object contains every individual line item detected in the "
+            "uploaded dataset (not just the ones in 'kpis'), keyed by its exact name, each with a "
+            "'value' and 'trend_pct' — check it for any specific metric the user names, even if it "
+            "isn't in 'kpis'. If it's a general question unrelated to the data, just answer it normally "
             "and naturally, like a helpful assistant.\n\n"
             f"{style_rule}"
             f"Context:\n{json.dumps(context, default=str)}\n\n"
